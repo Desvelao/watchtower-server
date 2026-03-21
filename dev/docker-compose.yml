@@ -1,0 +1,55 @@
+version: "3.8"
+
+services:
+  lapis:
+    build: ../docker/images/dev/lapis
+    image: monitor-server:dev
+    container_name: lapis_app
+    volumes:
+      - ../server:/app # Mount the app for live editing
+      - ../docker/images/dev/lapis/entrypoint.sh:/entrypoint.sh:ro
+    ports:
+      - "8080:8080" # Expose the Lapis server on port 8080
+    environment:
+      LAPIS_ENV: development
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+    entrypoint: ["sh", "/entrypoint.sh"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:14
+    container_name: monitor-server-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432" # Expose PostgreSQL on port 5432
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - "../config/dataset:/docker-entrypoint-initdb.d"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    image: node:18-alpine
+    container_name: vite
+    user: node
+    working_dir: /app
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../public:/app
+    command: sh -c "yarn && yarn dev"
+
+volumes:
+  pgdata:

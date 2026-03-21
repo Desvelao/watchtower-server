@@ -1,0 +1,7 @@
+server/client_body_temp
+server/fastcgi_temp
+server/logs
+server/nginx.conf.compiled
+server/proxy_temp
+server/scgi_temp
+server/uwsgi_temp

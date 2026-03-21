@@ -1,0 +1,15 @@
+code.scp_remote_lua {
+  padding: 4px;
+  background-color: gray;
+  color: white;
+  border-radius: 8px;
+}
+
+/* HighCode component overwrites */
+code.hljs {
+  font-size: 16px !important;
+}
+
+.code_header > .TL_word {
+  width: unset;
+}
