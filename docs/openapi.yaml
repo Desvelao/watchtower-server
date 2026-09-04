@@ -1,0 +1,1115 @@
+openapi: 3.0.3
+info:
+  title: price-monitor API
+  description: |
+    HTTP API for price-monitor: items, scraper site definitions, notification
+    channels, a boolean-expression rule engine, and the monitor/job
+    registry a scraping worker (embedded or standalone) reports through.
+
+    Every endpoint requires authentication - either a JWT bearer token
+    (from `/api/auth/login`) or an API key (`x-api-key` header) - and,
+    once authenticated, an RBAC permission tied to the caller's role. See
+    CLAUDE.md's "Users & roles" section for the live-enforcement design
+    (disabling a user, editing a role, or narrowing an API key's owner's
+    permissions takes effect on the very next request, no re-login).
+  version: "1.0.0"
+servers:
+  - url: http://localhost:8080
+    description: Local development server (dev/docker-compose.yml)
+security:
+  - bearerAuth: []
+  - apiKeyAuth: []
+tags:
+  - name: Auth
+    description: Login and API key management
+  - name: Users
+    description: DB-backed user accounts - the first admin is bootstrapped from INITIAL_ADMIN_USERNAME/INITIAL_ADMIN_PASSWORD
+  - name: Roles
+    description: Named permission sets assigned to users - the permission catalog is fixed in code, only role -> permission-set assignment is dynamic
+  - name: Items
+    description: The things being price-monitored
+  - name: Observations
+    description: Price observation ingest/history - posting one also creates a linked Event
+  - name: Events
+    description: Raw ingested data - the sole entry point for getting a fired Alert into the system
+  - name: Alerts
+    description: Fired alert instances (read + delete only - created as a side effect of an Event)
+  - name: Rules
+    description: The condition DSL the RuleEngine matches against new Events
+  - name: Monitors
+    description: Scraping-agent registry - self-reported identity and health via heartbeat
+  - name: Jobs
+    description: One row per (monitor, type, ref) work assignment a monitor reports on
+  - name: NotificationChannels
+    description: Discord/webhook destinations
+  - name: Scrapers
+    description: Remote-config Lua scraper site definitions
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+  responses:
+    Unauthorized:
+      description: Missing/invalid/expired credentials, or the account is disabled
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error: { type: string }
+              message: { type: string }
+    Forbidden:
+      description: Authenticated, but missing the required permission
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error: { type: string }
+              message: { type: string }
+              required_permission: { type: string }
+  schemas:
+    User:
+      type: object
+      properties:
+        id: { type: integer }
+        username: { type: string }
+        role_id: { type: integer }
+        enabled: { type: boolean }
+        created_at: { type: string }
+        updated_at: { type: string }
+    Role:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        permissions:
+          type: array
+          items: { type: string }
+    Item:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        url: { type: string }
+        enabled: { type: boolean }
+        last_scrape_status:
+          type: string
+          enum: [pending, triggering, acknowledged, error]
+          nullable: true
+        last_scrape_monitor: { type: string, nullable: true }
+        last_scrape_take_at: { type: string, nullable: true }
+        last_scrape_ack_at: { type: string, nullable: true }
+    Observation:
+      type: object
+      properties:
+        id: { type: integer }
+        item_id: { type: integer }
+        price: { type: number }
+        discount: { type: string, nullable: true }
+        available: { type: boolean, nullable: true }
+        url: { type: string }
+        timestamp: { type: string }
+    Event:
+      type: object
+      properties:
+        id: { type: integer }
+        source: { type: string, nullable: true }
+        payload: { type: string, nullable: true }
+        tags:
+          type: array
+          items: { type: string }
+          nullable: true
+        item_id: { type: integer, nullable: true }
+        alert_count: { type: integer }
+        created_at: { type: string }
+    Alert:
+      type: object
+      properties:
+        id: { type: integer }
+        status:
+          type: string
+          enum: [inactive, pending, triggering, acknowledged, error]
+        priority:
+          type: string
+          enum: [low, medium, high, critical]
+        event_id: { type: integer }
+        pattern: { type: string, nullable: true }
+        rule_id: { type: integer, nullable: true }
+        rule_name: { type: string, nullable: true }
+        tags:
+          type: array
+          items: { type: string }
+          nullable: true
+        monitor: { type: string, nullable: true }
+        monitor_take_at: { type: string, nullable: true }
+        monitor_ack_at: { type: string, nullable: true }
+        source: { type: string, nullable: true }
+        payload: { type: string, nullable: true }
+        created_at: { type: string }
+    Rule:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        source:
+          type: string
+          description: The flat rule document this row was parsed from (see CLAUDE.md's Rules section).
+        condition_expression: { type: string }
+        action: { type: string }
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+          nullable: true
+        tags:
+          type: array
+          items: { type: string }
+          nullable: true
+        enabled: { type: boolean }
+    Monitor:
+      type: object
+      properties:
+        monitor_id: { type: string }
+        connection_type:
+          type: string
+          enum: [http, mqtt, embedded]
+        version: { type: string, nullable: true }
+        capabilities:
+          type: array
+          items: { type: string }
+          nullable: true
+        item_filter: { type: string, nullable: true }
+        config: { type: string, nullable: true }
+        uptime_seconds: { type: integer, nullable: true }
+        last_seen_at: { type: string }
+    Job:
+      type: object
+      properties:
+        id: { type: integer }
+        monitor_id: { type: string }
+        type:
+          type: string
+          enum: [scrape, notify]
+        ref_id: { type: integer }
+        status:
+          type: string
+          enum: [pending, triggering, acknowledged, error]
+        message: { type: string, nullable: true }
+        action: { type: string, nullable: true }
+        retries: { type: integer }
+        taken_at: { type: string, nullable: true }
+        acked_at: { type: string, nullable: true }
+        error_at: { type: string, nullable: true }
+
+paths:
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in with username and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string, format: password }
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+                  token:
+                    type: string
+                    description: JWT bearer token, valid 24h, signed HS256.
+                  role:
+                    type: string
+                    description: Display-only - never trusted for enforcement (see GET /api/auth/me).
+        "401":
+          description: Invalid credentials
+
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      summary: The current caller's identity and live-resolved permissions
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  username: { type: string }
+                  role: { type: string }
+                  permissions:
+                    type: array
+                    items: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/auth/api_key:
+    get:
+      tags: [Auth]
+      summary: List the caller's own API keys
+      parameters:
+        - { name: from, in: query, schema: { type: integer } }
+        - { name: size, in: query, schema: { type: integer } }
+        - { name: search, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string, enum: [active, revoked] } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { type: object } }
+                  total_items: { type: integer }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Auth]
+      summary: Create an API key
+      description: >-
+        `permissions` is clamped (intersected) against the caller's own
+        current permissions at creation time, and re-clamped against them
+        on every use - narrowing the owner's role narrows an
+        already-issued key's effective grants immediately, with no
+        re-issuance.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label: { type: string }
+                permissions: { type: array, items: { type: string } }
+                expires_in_days: { type: number }
+      responses:
+        "200":
+          description: Created - the plaintext key is returned once, never again
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+                  api_key: { type: string, example: "akey_<32 hex kid>.<64 hex secret>" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/auth/api_key/{kid}:
+    put:
+      tags: [Auth]
+      summary: Rename an API key
+      parameters: [{ name: kid, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties: { label: { type: string } }
+      responses:
+        "200": { description: OK }
+    delete:
+      tags: [Auth]
+      summary: Delete an API key
+      parameters: [{ name: kid, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK }
+
+  /api/auth/api_key/{kid}/revoke:
+    post:
+      tags: [Auth]
+      summary: Revoke an API key (keeps the row, blocks further use)
+      parameters: [{ name: kid, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK }
+
+  /api/users:
+    get:
+      tags: [Users]
+      summary: List users
+      parameters:
+        - { name: username, in: query, schema: { type: string } }
+        - { name: role_id, in: query, schema: { type: integer } }
+        - { name: enabled, in: query, schema: { type: boolean } }
+        - { name: search, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/User" } }
+                  total_items: { type: integer }
+    post:
+      tags: [Users]
+      summary: Create a user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password, role_id]
+              properties:
+                username: { type: string }
+                password: { type: string, format: password }
+                role_id: { type: integer }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { message: { type: string }, item: { $ref: "#/components/schemas/User" } }
+
+  /api/users/{id}:
+    put:
+      tags: [Users]
+      summary: Update a user (never touches the password - see PUT .../password)
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username: { type: string }
+                role_id: { type: integer }
+                enabled: { type: boolean }
+      responses:
+        "200": { description: OK }
+    delete:
+      tags: [Users]
+      summary: Delete a user
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK }
+
+  /api/users/{id}/password:
+    put:
+      tags: [Users]
+      summary: Reset a user's password
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties: { password: { type: string, format: password } }
+      responses:
+        "200": { description: OK }
+
+  /api/roles:
+    get:
+      tags: [Roles]
+      summary: List roles
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Role" } }
+                  total_items: { type: integer }
+    post:
+      tags: [Roles]
+      summary: Create a role
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                permissions: { type: array, items: { type: string } }
+      responses:
+        "201": { description: Created }
+
+  /api/roles/{id}:
+    put:
+      tags: [Roles]
+      summary: Update a role - takes effect immediately for every user assigned to it
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                permissions: { type: array, items: { type: string } }
+      responses:
+        "200": { description: OK }
+    delete:
+      tags: [Roles]
+      summary: Delete a role (fails if any user is still assigned to it)
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK }
+        "400": { description: Role is still assigned to one or more users }
+
+  /api/items:
+    get:
+      tags: [Items]
+      summary: List items
+      parameters:
+        - { name: from, in: query, schema: { type: integer } }
+        - { name: size, in: query, schema: { type: integer } }
+        - { name: enabled, in: query, schema: { type: boolean } }
+        - { name: name, in: query, schema: { type: string } }
+        - { name: search, in: query, schema: { type: string } }
+        - { name: sort, in: query, schema: { type: string }, example: "name:asc" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Item" } }
+                  total_items: { type: integer }
+    post:
+      tags: [Items]
+      summary: Create an item
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                name: { type: string, description: "Defaults to a slug derived from the URL when omitted." }
+                url: { type: string }
+                enabled: { type: boolean }
+      responses:
+        "201": { description: Created }
+
+  /api/items/{id}:
+    get:
+      tags: [Items]
+      summary: Get an item
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK }
+        "404": { description: Not found }
+    put:
+      tags: [Items]
+      summary: Update an item
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK }
+    delete:
+      tags: [Items]
+      summary: Delete an item
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK }
+
+  /api/items/export:
+    get:
+      tags: [Items]
+      summary: Export all items as a JSON file
+      responses:
+        "200": { description: OK }
+
+  /api/items/import:
+    post:
+      tags: [Items]
+      summary: Import items from a previously exported JSON file
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties: { file: { type: string, format: binary } }
+      responses:
+        "200": { description: OK }
+
+  /api/observations:
+    get:
+      tags: [Observations]
+      summary: List price observations
+      parameters:
+        - { name: id, in: query, schema: { type: integer } }
+        - { name: search, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Observation" } }
+                  total_items: { type: integer }
+    post:
+      tags: [Observations]
+      summary: Ingest a price observation
+      description: >-
+        Also creates a linked Event (source = the item's name, payload =
+        this observation as JSON), which runs through the rule engine and
+        may fire one or more Alerts.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, price, url, timestamp]
+              properties:
+                id: { type: integer, description: item_id }
+                price: { type: number }
+                url: { type: string }
+                timestamp: { type: string }
+                discount: { type: string }
+                available: { type: boolean }
+      responses:
+        "200": { description: Created }
+
+  /api/observations/{id}:
+    delete:
+      tags: [Observations]
+      summary: Delete an observation
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK }
+
+  /api/events:
+    get:
+      tags: [Events]
+      summary: List events
+      parameters:
+        - { name: id, in: query, schema: { type: integer } }
+        - { name: source, in: query, schema: { type: string } }
+        - { name: item_id, in: query, schema: { type: integer } }
+        - { name: tags, in: query, schema: { type: string } }
+        - { name: search, in: query, schema: { type: string } }
+        - { name: created_after, in: query, schema: { type: string }, description: "Absolute timestamp, or a relative keyword like now-24h." }
+        - { name: created_before, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Event" } }
+                  total_items: { type: integer }
+    post:
+      tags: [Events]
+      summary: Create an event - resolves rule matches and creates the linked alert(s)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                source: { type: string }
+                payload: { type: string }
+                tags: { type: array, items: { type: string } }
+                item_id: { type: integer }
+      responses:
+        "202": { description: Event queued }
+
+  /api/events/{id}:
+    get:
+      tags: [Events]
+      summary: Get an event
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK }
+    delete:
+      tags: [Events]
+      summary: Delete an event (cascades to its alert(s))
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK }
+
+  /api/alerts:
+    get:
+      tags: [Alerts]
+      summary: List fired alerts
+      parameters:
+        - { name: status, in: query, schema: { type: string } }
+        - { name: priority, in: query, schema: { type: string } }
+        - { name: rule_id, in: query, schema: { type: string }, description: "An id, 'matched', or 'none'." }
+        - { name: tags, in: query, schema: { type: string } }
+        - { name: search, in: query, schema: { type: string } }
+        - { name: created_after, in: query, schema: { type: string } }
+        - { name: created_before, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Alert" } }
+                  total_items: { type: integer }
+
+  /api/alerts/{id}:
+    get:
+      tags: [Alerts]
+      summary: Get a fired alert
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK }
+        "404": { description: Not found }
+    delete:
+      tags: [Alerts]
+      summary: Delete a fired alert
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK }
+
+  /api/rules:
+    get:
+      tags: [Rules]
+      summary: List rules
+      parameters:
+        - { name: id, in: query, schema: { type: integer } }
+        - { name: name, in: query, schema: { type: string } }
+        - { name: action, in: query, schema: { type: string } }
+        - { name: enabled, in: query, schema: { type: boolean } }
+        - { name: search, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Rule" } }
+                  total_items: { type: integer }
+    post:
+      tags: [Rules]
+      summary: Create a rule from its flat source document
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source]
+              properties:
+                source:
+                  type: string
+                  example: |
+                    name: cheap-gpu
+                    if: price < 300 AND available = true
+                    action: notify-discord
+                    severity: high
+      responses:
+        "201": { description: Created }
+        "400": { description: Invalid rule source or condition expression }
+
+  /api/rules/{id}:
+    get:
+      tags: [Rules]
+      summary: Get a rule
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK }
+    put:
+      tags: [Rules]
+      summary: Update a rule
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source]
+              properties: { source: { type: string } }
+      responses:
+        "200": { description: OK }
+    delete:
+      tags: [Rules]
+      summary: Delete a rule
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK }
+
+  /api/rules/test:
+    post:
+      tags: [Rules]
+      summary: Match a sample event against every enabled rule (nothing is persisted)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                source: { type: string }
+                payload: { type: string }
+                tags: { type: array, items: { type: string } }
+                item_id: { type: integer }
+                price: { type: number }
+                discount: { type: string }
+                available: { type: boolean }
+                url: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  matches:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        action: { type: string }
+                        severity: { type: string, nullable: true }
+                        tags: { type: array, items: { type: string }, nullable: true }
+
+  /api/rules/test-expression:
+    post:
+      tags: [Rules]
+      summary: Evaluate an ad-hoc `if:` expression against a sample event (nothing is persisted, no rule needs to exist)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["if"]
+              properties:
+                if: { type: string }
+                source: { type: string }
+                payload: { type: string }
+                tags: { type: array, items: { type: string } }
+                item_id: { type: integer }
+                price: { type: number }
+                discount: { type: string }
+                available: { type: boolean }
+                url: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { matched: { type: boolean } }
+        "400": { description: Invalid expression }
+
+  /api/monitors:
+    get:
+      tags: [Monitors]
+      summary: List registered monitors
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Monitor" } }
+
+  /api/monitors/{id}:
+    get:
+      tags: [Monitors]
+      summary: Get a monitor
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK }
+        "404": { description: Not found }
+
+  /api/monitors/{id}/heartbeat:
+    put:
+      tags: [Monitors]
+      summary: Self-register/refresh a monitor's identity and health
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [connection_type]
+              properties:
+                connection_type: { type: string, enum: [http, mqtt, embedded] }
+                version: { type: string }
+                capabilities: { type: array, items: { type: string } }
+                item_filter: { type: string }
+                uptime_seconds: { type: number }
+                config: { type: string }
+      responses:
+        "202": { description: Heartbeat recorded }
+
+  /api/monitors/{id}/heartbeats:
+    get:
+      tags: [Monitors]
+      summary: Bucketed heartbeat history, for a connectivity histogram
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: bucket, in: query, required: true, schema: { type: string, enum: [minute, hour, day] } }
+        - { name: since, in: query, required: true, schema: { type: string } }
+        - { name: until, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties: { bucket: { type: string }, count: { type: integer } }
+
+  /api/jobs:
+    get:
+      tags: [Jobs]
+      summary: List jobs
+      parameters:
+        - { name: monitor_id, in: query, schema: { type: string } }
+        - { name: type, in: query, schema: { type: string, enum: [scrape, notify] } }
+        - { name: status, in: query, schema: { type: string } }
+        - { name: ref_id, in: query, schema: { type: integer } }
+        - { name: search, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Job" } }
+                  total_items: { type: integer }
+
+  /api/jobs/stats:
+    get:
+      tags: [Jobs]
+      summary: Per-monitor job totals + a breakdown by status
+      parameters: [{ name: type, in: query, schema: { type: string, enum: [scrape, notify] } }]
+      responses:
+        "200": { description: OK }
+
+  /api/jobs/{id}:
+    get:
+      tags: [Jobs]
+      summary: Get a job
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK }
+
+  /api/jobs/for/{type}/{ref_id}:
+    get:
+      tags: [Jobs]
+      summary: List every job reported for one (type, ref) pair, across all monitors
+      parameters:
+        - { name: type, in: path, required: true, schema: { type: string } }
+        - { name: ref_id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: OK }
+
+  /api/jobs/{type}/{ref_id}/{status}:
+    put:
+      tags: [Jobs]
+      summary: Monitor-facing status report (lazily creates the job on its first report)
+      description: >-
+        `status` is `triggering` or `ack`, mapped server-side to the DB's
+        `triggering`/`acknowledged` values. Upserted by
+        (monitor_id, type, ref_id) - see CLAUDE.md's Jobs section for the
+        retry/rollup semantics.
+      parameters:
+        - { name: type, in: path, required: true, schema: { type: string } }
+        - { name: ref_id, in: path, required: true, schema: { type: integer } }
+        - { name: status, in: path, required: true, schema: { type: string, enum: [triggering, ack] } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [monitor_id]
+              properties:
+                monitor_id: { type: string }
+                action: { type: string }
+                message: { type: string }
+      responses:
+        "202": { description: Status changed }
+
+  /api/jobs/{type}/{ref_id}/error:
+    put:
+      tags: [Jobs]
+      summary: Monitor-facing error report
+      parameters:
+        - { name: type, in: path, required: true, schema: { type: string } }
+        - { name: ref_id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [monitor_id]
+              properties:
+                monitor_id: { type: string }
+                message: { type: string }
+      responses:
+        "202": { description: Error recorded }
+
+  /api/notification_channels:
+    get:
+      tags: [NotificationChannels]
+      summary: List notification channels
+      responses:
+        "200": { description: OK }
+    post:
+      tags: [NotificationChannels]
+      summary: Create a notification channel (discord or webhook)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, name, options]
+              properties:
+                type: { type: string, enum: [discord, webhook] }
+                name: { type: string }
+                options: { type: object }
+      responses:
+        "200": { description: Created }
+
+  /api/notification_channels/{id}:
+    get:
+      tags: [NotificationChannels]
+      summary: Get a notification channel
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK }
+    put:
+      tags: [NotificationChannels]
+      summary: Update a notification channel
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK }
+    delete:
+      tags: [NotificationChannels]
+      summary: Delete a notification channel
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK }
+
+  /api/scrapers/remote_config_lua/site:
+    get:
+      tags: [Scrapers]
+      summary: List scraper site definitions
+      responses:
+        "200": { description: OK }
+    post:
+      tags: [Scrapers]
+      summary: Create a scraper site definition
+      responses:
+        "201": { description: Created }
+
+  /api/scrapers/remote_config_lua/site/{id}:
+    put:
+      tags: [Scrapers]
+      summary: Update a scraper site definition
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK }
+    delete:
+      tags: [Scrapers]
+      summary: Delete a scraper site definition
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK }
+
+  /api/scrapers/remote_config_lua/site/{id}/test:
+    post:
+      tags: [Scrapers]
+      summary: Test a saved site definition against a URL
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [test_url]
+              properties: { test_url: { type: string } }
+      responses:
+        "200": { description: OK }
+
+  /api/scrapers/remote_config_lua/test:
+    post:
+      tags: [Scrapers]
+      summary: Test an ad-hoc (unsaved) site definition against a URL
+      responses:
+        "200": { description: OK }
+
+  /api/scrapers/remote_config_lua/test/_all:
+    post:
+      tags: [Scrapers]
+      summary: Test every saved site definition against a URL
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [test_url]
+              properties: { test_url: { type: string } }
+      responses:
+        "200": { description: OK }
+
+  /api/scrapers/remote_config_lua/export:
+    get:
+      tags: [Scrapers]
+      summary: Export all site definitions as a JSON file
+      responses:
+        "200": { description: OK }
+
+  /api/scrapers/remote_config_lua/import:
+    post:
+      tags: [Scrapers]
+      summary: Import site definitions from a previously exported JSON file
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties: { file: { type: string, format: binary } }
+      responses:
+        "200": { description: OK }

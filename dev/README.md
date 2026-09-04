@@ -38,6 +38,28 @@ docker compose exec frontend npm run dev
 docker compose exec frontend yarn build
 ```
 
+## Log in / get a token
+
+Every route is authenticated (see `CLAUDE.md`). The dev stack bootstraps an
+admin account from `INITIAL_ADMIN_USERNAME`/`INITIAL_ADMIN_PASSWORD` (see
+`.env.example`, defaults `admin`/`adminpass`):
+
+```console
+curl -s -XPOST localhost:8080/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"adminpass"}'
+```
+
+Use the returned `token` as `Authorization: Bearer <token>`, or create an
+API key (`POST /api/auth/api_key`, needs `api_key:manage`) and use it as an
+`x-api-key` header instead — see `docs/openapi.yaml` for the full route
+list and `docs/dev/worker-configuration.md` for how a worker authenticates.
+
+## Run the standalone worker
+
+See `docs/dev/worker-configuration.md` — the `worker` service is idle by
+default (no `WORKER_CONFIG_FILE`/`SERVER_API_KEY` configured yet).
+
 ## Dev references
 
 lapis: https://leafo.net/lapis/reference.html

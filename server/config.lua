@@ -5,8 +5,6 @@ local database = os.getenv("POSTGRES_DB")
 local host = os.getenv("POSTGRES_HOST")
 local port = os.getenv("POSTGRES_PORT")
 
-print('------------------------------------'..host)
-
 config("development", {
   server = "nginx",
   code_cache = "off",
