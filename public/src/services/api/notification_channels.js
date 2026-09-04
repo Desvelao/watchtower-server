@@ -18,7 +18,7 @@ export async function getList(options = {}) {
     sortBy = `${key}:${order}`;
   }
   return await http(
-    `${base}?size=${itemsPerPage}&from=${(page - 1) * 10}${sortBy ? '&sort=' + sortBy : ''}${search ? '&search=' + search : ''}`,
+    `${base}?size=${itemsPerPage}&from=${(page - 1) * itemsPerPage}${sortBy ? '&sort=' + sortBy : ''}${search ? '&search=' + search : ''}`,
     {
       method: 'get',
     },

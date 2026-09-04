@@ -1,50 +1,18 @@
-import { http } from './http';
+import { http, buildQueryString } from './http';
 
 const base = '/api/monitors';
 
-/**
- * Gets a list of items with pagination, search, and sorting options.
- * @param {GetListOptions} options
- * @returns
- */
-export async function getList(options = {}) {
-  const page = options.page || 1;
-  const itemsPerPage = options.itemsPerPage || 10;
-  const search = options.search;
-
-  let sortBy;
-  if (options.sortBy && options.sortBy[0]) {
-    const { key, order } = options.sortBy[0];
-    sortBy = `${key}:${order}`;
-  }
-  return await http(
-    `${base}?size=${itemsPerPage}&from=${(page - 1) * 10}${sortBy ? '&sort=' + sortBy : ''}${search ? '&search=' + search : ''}`,
-    {
-      method: 'get',
-    },
-  );
+export async function listMonitors() {
+  const res = await http(base);
+  return res.body; // { items }
 }
 
-export async function get(id) {
-  return await http(`${base}/${id}`, { method: 'get' });
+export async function getMonitor(id) {
+  const res = await http(`${base}/${id}`);
+  return res.body; // { item }
 }
 
-export async function create(payload) {
-  return await http(`${base}`, {
-    method: 'post',
-    body: payload,
-    headers: { 'content-type': 'application/json' },
-  });
-}
-
-export async function edit(id, payload) {
-  return await http(`${base}/${id}`, {
-    method: 'put',
-    body: payload,
-    headers: { 'content-type': 'application/json' },
-  });
-}
-
-export async function remove(id) {
-  return await http(`${base}/${id}`, { method: 'delete' });
+export async function getMonitorHeartbeats(id, query = {}) {
+  const res = await http(`${base}/${id}/heartbeats${buildQueryString(query)}`);
+  return res.body; // { items }
 }

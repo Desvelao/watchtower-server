@@ -7,13 +7,42 @@ export class HTTPError extends Error {
   }
 }
 
-export async function http(url, options) {
+// Lazily imported (not at module top level) to avoid a circular import:
+// stores/auth.js's own actions call http(), and http() needs the store's
+// current token/logout() - importing the store statically here would
+// create a cycle Vite's dev server resolves inconsistently. Deferred
+// until the store is actually needed (every real call), by which point
+// Pinia is already installed (see main.js).
+async function getAuthStore() {
+  const { useAuthStore } = await import("../../stores/auth");
+  return useAuthStore();
+}
+
+// Builds a "?a=1&b=2" query string from a plain object, skipping
+// null/undefined/empty-string values so callers can pass a filters object
+// straight through without pre-filtering it themselves.
+export function buildQueryString(query = {}) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value === null || value === undefined || value === '') continue;
+    params.set(key, value);
+  }
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+}
+
+export async function http(url, options = {}) {
   // Destructure options to separate body and headers from others.
-  const { body, headers = {}, ...restOptions } = options;
+  const { body, headers = {}, skipAuth, ...restOptions } = options;
 
   // Normalize headers into a Headers instance.
   let finalHeaders =
     headers instanceof Headers ? headers : new Headers(headers);
+
+  const auth = await getAuthStore();
+  if (!skipAuth && auth.token) {
+    finalHeaders.set("Authorization", `Bearer ${auth.token}`);
+  }
 
   // If there is a body and the Content-Type header indicates JSON,
   // automatically stringify the body if it's not already a string.
@@ -58,6 +87,12 @@ export async function http(url, options) {
 
   // If the HTTP status indicates a failure, throw an error that includes the enhanced response
   if (!enhancedResponse.ok) {
+    // A 401 on an authenticated request means the token is dead (expired,
+    // the account got disabled, the role/key was revoked) - log out so
+    // the UI doesn't keep showing stale authenticated state.
+    if (enhancedResponse.status === 401 && !skipAuth) {
+      auth.logout();
+    }
     throw new HTTPError(
       `HTTP error! status: ${rawResponse.status}`,
       enhancedResponse,

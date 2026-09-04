@@ -1,5 +1,7 @@
 # --- Stage 1: Build frontend assets ---
-FROM node:18-alpine AS frontend-builder
+# Node 22, not 18: Tailwind 4's @tailwindcss/oxide needs Node >= 20, and
+# vitest 4's own toolchain (nopt, transitively) needs >= 22.
+FROM node:22-alpine AS frontend-builder
 
 WORKDIR /frontend
 COPY public/package.json public/yarn.lock ./

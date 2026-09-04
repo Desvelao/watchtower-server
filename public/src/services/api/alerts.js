@@ -1,51 +1,23 @@
-import { http } from './http';
+import { http, buildQueryString } from './http';
 
 const base = '/api/alerts';
 
-/**
- * Gets a list of items with pagination, search, and sorting options.
- * @param {GetListOptions} options
- * @returns
- */
-export async function getList(options = {}) {
-  const page = options.page || 1;
-  const itemsPerPage = options.itemsPerPage || 10;
-  const search = options.search;
-
-  let sortBy;
-  if (options.sortBy && options.sortBy[0]) {
-    const { key, order } = options.sortBy[0];
-    sortBy = `${key}:${order}`;
-  }
-
-  return await http(
-    `${base}?size=${itemsPerPage}&from=${(page - 1) * 10}${sortBy ? '&sort=' + sortBy : ''}${search ? '&search=' + search : ''}`,
-    {
-      method: 'get',
-    },
-  );
+// Fired alert instances - read + delete only. POST /api/events (see
+// events.js) is the sole entry point that creates one; there is no
+// PUT/POST here (status-mutation routes are deferred to when a
+// notification worker exists to drive them - see the alerting plugin's
+// own header comment).
+export async function listAlerts(query = {}) {
+  const res = await http(`${base}${buildQueryString(query)}`);
+  return res.body; // { items, total_items }
 }
 
-export async function get(id) {
-  return await http(`${base}/${id}`, { method: 'get' });
+export async function getAlert(id) {
+  const res = await http(`${base}/${id}`);
+  return res.body; // { item }
 }
 
-export async function create(payload) {
-  return await http(`${base}`, {
-    method: 'post',
-    body: payload,
-    headers: { 'content-type': 'application/json' },
-  });
-}
-
-export async function edit(id, payload) {
-  return await http(`${base}/${id}`, {
-    method: 'put',
-    body: payload,
-    headers: { 'content-type': 'application/json' },
-  });
-}
-
-export async function remove(id) {
-  return await http(`${base}/${id}`, { method: 'delete' });
+export async function deleteAlert(id) {
+  const res = await http(`${base}/${id}`, { method: 'delete' });
+  return res.body; // { message }
 }

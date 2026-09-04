@@ -83,7 +83,9 @@ services:
         condition: service_healthy
 
   frontend:
-    image: node:18-alpine
+    # Node 22, not 18/20: Tailwind 4's @tailwindcss/oxide needs Node >= 20,
+    # and vitest 4's own toolchain (nopt, transitively) needs >= 22.
+    image: node:22-alpine
     container_name: vite
     user: node
     working_dir: /app

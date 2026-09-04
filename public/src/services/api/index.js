@@ -1,4 +1,11 @@
-export * as APIAlerts from "./alerts";
-export * as APIProducts from "./products";
-export * as APIMonitors from "./monitors";
-export * as APINotificationChannels from "./notification_channels";
+export * as APIAlerts from './alerts';
+export * as APIProducts from './products';
+export * as APIObservations from './observations';
+export * as APINotificationChannels from './notification_channels';
+export * as APIAuth from './auth';
+export * as APIUsers from './users';
+export * as APIRoles from './roles';
+export * as APIRules from './rules';
+export * as APIEvents from './events';
+export * as APIMonitors from './monitors';
+export * as APIJobs from './jobs';
