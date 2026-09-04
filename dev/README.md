@@ -77,22 +77,16 @@ rsync -avz --delete --dry-run --exclude 'public/' --exclude 'data/' --exclude .e
 docker compose up -d
 ```
 
-# Database migrations
+# Database schema changes
 
-Requirements:
+There is no migration system - the whole schema lives in one file,
+`config/dataset/init.sql`, applied by Postgres' `docker-entrypoint-initdb.d`
+on first boot only. Changing the schema means editing that file and
+recreating the volume:
 
-- `luabitop`:
-
-```
-luarocks-5.1 install luabitop
-```
-
-- migrations.lua
-
-Running a migrations:
-
-```
-lapis migrate
+```console
+docker compose down -v
+docker compose up -d
 ```
 
 # Issues with xml dependency
