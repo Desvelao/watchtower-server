@@ -11,13 +11,21 @@ RUN yarn && yarn build
 FROM openresty/openresty:alpine
 
 # Install required packages: build tools, LuaRocks, and Lua development headers
-# Install Lapis using LuaRocks
+# Install Lapis using LuaRocks. lua-resty-jwt's transitive
+# resty.openssl.kdf dependency covers server/plugins/security's scrypt
+# needs with no extra package; luastash is the embedded worker's pipeline
+# runner (only loaded when USE_EMBED_WORKER=1).
 RUN apk add --no-cache build-base luarocks lua5.1-dev openssl-dev \
     && luarocks-5.1 install lapis \
-    && luarocks-5.1 install tableshape
+    && luarocks-5.1 install tableshape \
+    && luarocks-5.1 install lua-resty-jwt \
+    && luarocks-5.1 install luastash
 
 # Copy Lapis app
 COPY server/ /app
+# Shared Lua modules (server + standalone worker) - see shared/README.md
+COPY shared/ /shared
+ENV LUA_PATH="/shared/?.lua;/shared/?/init.lua;;"
 
 WORKDIR /app
 

@@ -61,7 +61,8 @@ services:
   # iterating, same as pibuzz's dev workflow.
   worker:
     build:
-      context: ../docker/images/dev/worker
+      context: ..
+      dockerfile: docker/images/dev/worker/Dockerfile
     image: monitor-worker:dev
     container_name: price-monitor-worker
     volumes:

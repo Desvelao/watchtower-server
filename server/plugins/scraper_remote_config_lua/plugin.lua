@@ -12,9 +12,7 @@ local get_db_where_clause_from_request_params = require("lib.routes").get_db_whe
 local compose = require("lib.routes").compose
 local tableshape = require("tableshape").types
 local tobool_from_key = require("lib.utils").tobool_from_key
-local WebScraper = require('webscraper').WebScraper
-local WebScraperFilters = require('webscraper.filters.filters')
-local WebScraperValidators = require('webscraper.filters.validators')
+local scraper_creator = require('scraper_creator')
 local utils = require('plugins.scraper_remote_config_lua.utils')
 local cjson = require('cjson')
 local Logger = require('core.logger')
@@ -30,9 +28,6 @@ local Plugin = {
 }
 
 local function noop() end
-
--- parser deep limit
-htmlparser_looplimit=8000
 
 -- Accepts either a dot-separated string path or a table of keys
 local function getProperty(obj, path)
@@ -168,22 +163,11 @@ function Plugin.setup(app, deps)
         }},
         
     })(function(self)
-        local webscraper = WebScraper:new();
-        for k, v in pairs(WebScraperFilters) do
-            webscraper.filters:register(k, v)
-        end
-
-        for k, v in pairs(WebScraperValidators) do
-            webscraper.validators:register(k, v)
-        end
-
-        webscraper.sites:register(self.params.name, {
-            name = self.params.name,
-            urls_match = self.params.urls_match,
-            fields = self.params.fields,
+        local webscraper = scraper_creator.new({
+            { name = self.params.name, urls_match = self.params.urls_match, fields = self.params.fields },
         })
 
-        local data = webscraper:run(self.params.test_url, {}, {logger={info=print,debug=print, warn=print, error=print}})
+        local data = webscraper:run(self.params.test_url)
 
         return {json = { ok = data and true or false, data = data or nil, test= self.params } }
     end)))
@@ -240,23 +224,12 @@ function Plugin.setup(app, deps)
         local opr, err = models.ScraperRemote:find({
             id=id
         })
-        
-        local webscraper = WebScraper:new();
-        for k, v in pairs(WebScraperFilters) do
-            webscraper.filters:register(k, v)
-        end
 
-        for k, v in pairs(WebScraperValidators) do
-            webscraper.validators:register(k, v)
-        end
-
-        webscraper.sites:register(opr.name, {
-            name = opr.name,
-            urls_match = opr.urls_match,
-            fields = opr.fields,
+        local webscraper = scraper_creator.new({
+            { name = opr.name, urls_match = opr.urls_match, fields = opr.fields },
         })
 
-        local data = webscraper:run(self.params.test_url, {}, {logger={info=print,debug=print, warn=print, error=print}})
+        local data = webscraper:run(self.params.test_url)
 
         return {json = { ok = data and true or false, data = data or nil, test=self.params} }
     end)))
@@ -347,26 +320,10 @@ function Plugin.setup(app, deps)
 
         local test_url = self.params.test_url
 
-        local opr, err = models.ScraperRemote:select()
-        
-        local webscraper = WebScraper:new();
-        for k, v in pairs(WebScraperFilters) do
-            webscraper.filters:register(k, v)
-        end
+        local sites = models.ScraperRemote:select()
+        local webscraper = scraper_creator.new(sites)
 
-        for k, v in pairs(WebScraperValidators) do
-            webscraper.validators:register(k, v)
-        end
-
-        for _, site in pairs(opr) do
-            webscraper.sites:register(site.name, {
-                name = site.name,
-                urls_match = site.urls_match,
-                fields = site.fields,
-            })
-        end
-
-        local data = webscraper:run(self.params.test_url, {}, {logger={info=print,debug=print, warn=print, error=print}})
+        local data = webscraper:run(self.params.test_url)
 
         return {json = { ok = data and true or false, data = data or nil, test=self.params} }
     end)))

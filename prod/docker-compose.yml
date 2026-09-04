@@ -14,6 +14,15 @@ services:
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
       # DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      # ===== AUTH =====
+      JWT_SECRET: ${JWT_SECRET}
+      # First admin account, bootstrapped idempotently on server boot -
+      # leave unset (or ignore) once you've created your own admin user.
+      INITIAL_ADMIN_USERNAME: ${INITIAL_ADMIN_USERNAME:-}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
+      # ===== EMBEDDED WORKER =====
+      USE_EMBED_WORKER: ${USE_EMBED_WORKER:-0}
+      WORKER_CONFIG_FILE: ${WORKER_CONFIG_FILE:-}
     # command: lapis server development # Start Lapis in development mode
     depends_on:
       db:
