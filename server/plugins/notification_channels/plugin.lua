@@ -8,16 +8,22 @@ local get_optional_query_parameters = require("lib.routes").get_optional_query_p
 local get_db_query_params_from_request_params = require("lib.routes").get_db_query_params_from_request_params
 local get_db_where_clause_from_request_params = require("lib.routes").get_db_where_clause_from_request_params
 local create_search_map_clause = require("lib.routes").create_search_map_clause
+local compose = require("lib.routes").compose
 
 local base_path = "/api/notification_channels"
 
 local Plugin = {
-  name = 'notifications_channels'
+  name = 'notifications_channels',
+  dependencies = {'security'},
 }
 
-function Plugin.setup(app)
+function Plugin.setup(app, deps)
+    local security = deps.security
+    local auth, rbac, perms = security.auth, security.rbac, security.perms
+    local require_auth = auth:with({require = true})
+
     -- Endpoint: List all product scraping configurations
-    app:get(base_path, get_optional_query_parameters({
+    app:get(base_path, compose(require_auth, rbac:with(perms.CHANNELS_READ))(get_optional_query_parameters({
         {"from", tableshape.number, tonumber},
         {"size", tableshape.number, tonumber},
         {"enabled",tableshape.boolean, tobool_from_key},
@@ -48,20 +54,20 @@ function Plugin.setup(app)
         local result = models.NotificationChannels:select(db_query)
         local total_items = models.NotificationChannels:count(where_clause)
         return { json = {items = result or {}, total_items=total_items} }
-    end))
-    
+    end)))
+
     -- Endpoint: List all product scraping configurations
-    app:get(base_path .. "/:id", function(self)
+    app:get(base_path .. "/:id", compose(require_auth, rbac:with(perms.CHANNELS_READ))(function(self)
         local id = self.params.id
         local item = models.NotificationChannels:find({id=id})
         if not item then
             return { status=404, json = { message = "Product was not found", id = id }}
         end
         return { json = {item = item} }
-    end)
-    
+    end))
+
     -- Endpoint: Add a new product for scraping
-    app:post(base_path, capture_bad_request_params_validate({
+    app:post(base_path, compose(require_auth, rbac:with(perms.CHANNELS_CREATE))(capture_bad_request_params_validate({
         {"type", types.valid_text},
         {"name", types.valid_text}
     })(function(self)
@@ -91,10 +97,10 @@ function Plugin.setup(app)
         end
     
         return { status = 200, json = { success = true, message = "Notification channel added successfully.", data=result } }
-    end))
-    
+    end)))
+
     -- Endpoint: Edit a product for scraping (using code as identifier)
-    app:put(base_path .. "/:id", capture_bad_request_params_validate({
+    app:put(base_path .. "/:id", compose(require_auth, rbac:with(perms.CHANNELS_UPDATE))(capture_bad_request_params_validate({
         {"id", types.db_id},
         {"type", types.valid_text},
         {"name", types.valid_text}
@@ -125,11 +131,11 @@ function Plugin.setup(app)
         end
     
         return { status = 200, json = { success = true, message = "Notification channel updateed successfully.", data=result } }
-    end))
-    
-    app:delete(base_path .. "/:id", function(self)
+    end)))
+
+    app:delete(base_path .. "/:id", compose(require_auth, rbac:with(perms.CHANNELS_DELETE))(function(self)
         local id = self.params.id
-    
+
         if not id then
             return { status = 400, json = { error = "Missing monitor id." } }
         end
@@ -137,13 +143,13 @@ function Plugin.setup(app)
         local opr, err = models.NotificationChannels:find({
             id=id
         }):delete()
-    
+
         if not opr then
             return { status = 500, json = { error = err or "Unable to remove monitor." } }
         end
-    
+
         return { json = { success = true, message = "Product monitor successfully.", data = err } }
-    end)
+    end))
 end
 
 return Plugin

@@ -9,6 +9,7 @@ local capture_bad_request_params_validate = require("lib.routes").capture_bad_re
 local get_optional_query_parameters = require("lib.routes").get_optional_query_parameters
 local get_db_query_params_from_request_params = require("lib.routes").get_db_query_params_from_request_params
 local get_db_where_clause_from_request_params = require("lib.routes").get_db_where_clause_from_request_params
+local compose = require("lib.routes").compose
 local tableshape = require("tableshape").types
 local tobool_from_key = require("lib.utils").tobool_from_key
 local WebScraper = require('webscraper').WebScraper
@@ -24,7 +25,8 @@ local base_path = "/api/scrapers/remote_config_lua"
 
 local Plugin = {
   name = 'scraper_remote_config_lua',
-  install_deps = {'lua-requests'}
+  install_deps = {'lua-requests'},
+  dependencies = {'security'},
 }
 
 local function noop() end
@@ -86,9 +88,13 @@ end
 
 local validate_array_of_string_non_empty = tableshape.array_of(validate_string_non_empty)
 
-function Plugin.setup(app)
+function Plugin.setup(app, deps)
+    local security = deps.security
+    local auth, rbac, perms = security.auth, security.rbac, security.perms
+    local require_auth = auth:with({require = true})
+
     -- Endpoint: List all product scraping configurations
-    app:get(base_path .. "/site", get_optional_query_parameters({
+    app:get(base_path .. "/site", compose(require_auth, rbac:with(perms.SCRAPERS_READ))(get_optional_query_parameters({
         {"from", tableshape.number, tonumber},
         {"size", tableshape.number, tonumber},
         {"enabled",tableshape.boolean, tobool_from_key},
@@ -126,20 +132,20 @@ function Plugin.setup(app)
         self.context.logger:debug("Selecting items with {db_query} {where_clause} results {ok} {total_items}", {db_query=db_query, where_clause=where_clause, ok=ok, total_items=total_items})
 
         return { json = {items = items or {}, total_items = total_items}}
-    end))    
+    end)))
 
 
-    app:post(base_path .. "/site", json_params(function(self)
+    app:post(base_path .. "/site", compose(require_auth, rbac:with(perms.SCRAPERS_WRITE))(json_params(function(self)
 
         local item = get_props_from_table(self.params)
         item.name = self.params.name
 
         local new_item = models.ScraperRemote:create(item)
-    
-        return { status = 201, json = { success = true, message = "Product added successfully.", item=new_item } }
-    end))
 
-    app:post(base_path .. "/test", capture_bad_request_params_validate({
+        return { status = 201, json = { success = true, message = "Product added successfully.", item=new_item } }
+    end)))
+
+    app:post(base_path .. "/test", compose(require_auth, rbac:with(perms.SCRAPERS_READ))(capture_bad_request_params_validate({
         {"name",validate_string_non_empty},
         {"test_url",validate_url},
         {"urls_match",validate_array_of_string_non_empty},
@@ -180,10 +186,10 @@ function Plugin.setup(app)
         local data = webscraper:run(self.params.test_url, {}, {logger={info=print,debug=print, warn=print, error=print}})
 
         return {json = { ok = data and true or false, data = data or nil, test= self.params } }
-    end))
-    
+    end)))
+
     -- Endpoint: Edit a product for scraping (using code as identifier)
-    app:put(base_path .. "/site/:id", capture_bad_request_params_validate({
+    app:put(base_path .. "/site/:id", compose(require_auth, rbac:with(perms.SCRAPERS_WRITE))(capture_bad_request_params_validate({
         {"id",types.db_id},
         {"name",validate_string_non_empty},
         {"urls_match",validate_array_of_string_non_empty},
@@ -222,9 +228,9 @@ function Plugin.setup(app)
         end
 
         return { json = { success = true, message = "Site updated successfully." } }
-    end))
+    end)))
 
-    app:post(base_path .. "/site/:id/test", capture_bad_request_params_validate({
+    app:post(base_path .. "/site/:id/test", compose(require_auth, rbac:with(perms.SCRAPERS_READ))(capture_bad_request_params_validate({
         {"id",types.db_id},
         {"test_url",validate_url},
     })(function(self)
@@ -253,10 +259,10 @@ function Plugin.setup(app)
         local data = webscraper:run(self.params.test_url, {}, {logger={info=print,debug=print, warn=print, error=print}})
 
         return {json = { ok = data and true or false, data = data or nil, test=self.params} }
-    end))
-    
+    end)))
+
     -- Endpoint: Remove a site for scraping (identified by id)
-    app:delete(base_path .. "/site/:id", capture_bad_request_params_validate({
+    app:delete(base_path .. "/site/:id", compose(require_auth, rbac:with(perms.SCRAPERS_WRITE))(capture_bad_request_params_validate({
         {"id",types.db_id},
     })(function(self)
         local id = self.params.id
@@ -264,17 +270,17 @@ function Plugin.setup(app)
         local opr, err = models.ScraperRemote:find({
             id=id
         }):delete()
-    
+
         if not opr then
             return { status = 500, json = { error = err or "Unable to remove site." } }
         end
-    
+
         return { json = { success = true, message = "Site removed successfully." } }
-    end))
+    end)))
 
 
     -- Endpoint: Export sites data
-    app:get(base_path .. "/export", function(self)
+    app:get(base_path .. "/export", compose(require_auth, rbac:with(perms.SCRAPERS_READ))(function(self)
 
         local ok, result = pcall(function()
             local items = models.ScraperRemote:select()
@@ -296,9 +302,9 @@ function Plugin.setup(app)
             layout = false,
             json = {description='Sites configuration for scraper:remote', items=result.items or {}}
         }
-    end)
+    end))
 
-    app:post(base_path .. "/import", function(self)
+    app:post(base_path .. "/import", compose(require_auth, rbac:with(perms.SCRAPERS_WRITE))(function(self)
 
         local file = self.params.file
 
@@ -333,9 +339,9 @@ function Plugin.setup(app)
         end
 
         return {json = { ok=ok_import, content=err }}
-    end)
+    end))
 
-    app:post(base_path .. "/test/_all", capture_bad_request_params_validate({
+    app:post(base_path .. "/test/_all", compose(require_auth, rbac:with(perms.SCRAPERS_READ))(capture_bad_request_params_validate({
         {"test_url",validate_url},
     })(function(self)
 
@@ -363,7 +369,7 @@ function Plugin.setup(app)
         local data = webscraper:run(self.params.test_url, {}, {logger={info=print,debug=print, warn=print, error=print}})
 
         return {json = { ok = data and true or false, data = data or nil, test=self.params} }
-    end))
+    end)))
 end
 
 return Plugin

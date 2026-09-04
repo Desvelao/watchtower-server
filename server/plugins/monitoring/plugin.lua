@@ -5,20 +5,29 @@ local capture_bad_request_params_validate = require("lib.routes").capture_bad_re
 local get_db_query_params_from_request_params = require("lib.routes").get_db_query_params_from_request_params
 local get_db_where_clause_from_request_params = require("lib.routes").get_db_where_clause_from_request_params
 local create_search_map_clause = require("lib.routes").create_search_map_clause
+local compose = require("lib.routes").compose
 local types = require("lapis.validate.types")
 local tableshape = require("tableshape").types
 
+-- Price observation ingest/history. Base path stays "/api/monitors" here -
+-- renamed to "/api/observations" in the Phase 3 rename to
+-- plugins/observations, which frees "monitors" for the scraping-agent
+-- registry (Phase 4).
 local base_path = "/api/monitors"
 
 local Plugin = {
-  name = 'monitoring'
+  name = 'monitoring',
+  dependencies = {'security'},
 }
 
-function Plugin.setup(app)
+function Plugin.setup(app, deps)
+    local security = deps.security
+    local auth, rbac, perms = security.auth, security.rbac, security.perms
+    local require_auth = auth:with({require = true})
 
   -- Endpoint: List all product scraping configurations
     -- TODO: add filtering
-    app:get(base_path, function(self)
+    app:get(base_path, compose(require_auth, rbac:with(perms.OBSERVATIONS_READ))(function(self)
         -- Retrieve the list of products from the database
         local where_params = {
                 "id",
@@ -48,8 +57,8 @@ function Plugin.setup(app)
         end
 
         return { json = {items = result.items or {}, total_items = result.total_items} }
-    end)
-    
+    end))
+
     -- Endpoint: List all product scraping configurations
     -- app:get(base_path .. "/:id", function(self)
     --     local id = self.params.id
@@ -61,7 +70,7 @@ function Plugin.setup(app)
     -- end)
     
     -- Endpoint: Add a new product for scraping
-    app:post(base_path, capture_bad_request_params_validate({
+    app:post(base_path, compose(require_auth, rbac:with(perms.OBSERVATIONS_CREATE))(capture_bad_request_params_validate({
         {"id", types.db_id},
         {"price", tableshape.number},
         {"url", types.valid_text},
@@ -87,8 +96,8 @@ function Plugin.setup(app)
         end
     
         return { status = 200, json = { success = true, message = "Monitor record added successfully.", data=result } }
-    end))
-    
+    end)))
+
     -- Endpoint: Edit a product for scraping (using code as identifier)
     -- app:put(base_path .. "/:id", json_params(function(self)
     --     local id = self.params.id
@@ -122,9 +131,9 @@ function Plugin.setup(app)
     --     return { json = { success = true, message = "Product updated successfully." } }
     -- end))
     
-    app:delete(base_path .. "/:id", function(self)
+    app:delete(base_path .. "/:id", compose(require_auth, rbac:with(perms.OBSERVATIONS_DELETE))(function(self)
         local id = self.params.id
-    
+
         if not id then
             return { status = 400, json = { error = "Missing monitor id." } }
         end
@@ -132,13 +141,13 @@ function Plugin.setup(app)
         local opr, err = models.Monitors:find({
             id=id
         }):delete()
-    
+
         if not opr then
             return { status = 500, json = { error = err or "Unable to remove monitor." } }
         end
-    
+
         return { json = { success = true, message = "Product monitor successfully.", data = err } }
-    end)
+    end))
 end
 
 return Plugin

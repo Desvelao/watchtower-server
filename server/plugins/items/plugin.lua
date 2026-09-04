@@ -10,6 +10,7 @@ local get_optional_query_parameters = require("lib.routes").get_optional_query_p
 local get_db_query_params_from_request_params = require("lib.routes").get_db_query_params_from_request_params
 local get_db_where_clause_from_request_params = require("lib.routes").get_db_where_clause_from_request_params
 local create_search_map_clause = require("lib.routes").create_search_map_clause
+local compose = require("lib.routes").compose
 local tableshape = require("tableshape").types
 local tobool_from_key = require("lib.utils").tobool_from_key
 local cjson = require("cjson")
@@ -17,10 +18,15 @@ local cjson = require("cjson")
 local base_path = "/api/items"
 
 local Plugin = {
-  name = 'items'
+  name = 'items',
+  dependencies = {'security'},
 }
 
-function Plugin.setup(app)
+function Plugin.setup(app, deps)
+    local security = deps.security
+    local auth, rbac, perms = security.auth, security.rbac, security.perms
+    local require_auth = auth:with({require = true})
+
     -- Endpoint: List all item scraping configurations
     local handler_get = get_optional_query_parameters({
         {"from", tableshape.number, tonumber},
@@ -62,18 +68,19 @@ function Plugin.setup(app)
 
         return { json = {items = result.items or {}, total_items=result.total_items} }
     end)
+    handler_get = compose(require_auth, rbac:with(perms.ITEMS_READ))(handler_get)
     -- app:get(base_path, handler_get)
-    
-    
+
+
     -- Endpoint: List all item scraping configurations
-    app:get(base_path .. "/:id", function(self)
+    app:get(base_path .. "/:id", compose(require_auth, rbac:with(perms.ITEMS_READ))(function(self)
         local id = self.params.id
         local item = models.Items:find({id=id})
         if not item then
             return { status=404, json = { message = "Item was not found", id = id }}
         end
         return { json = {item = item} }
-    end)
+    end))
     
     -- Reuse the previous slugify_url_path function
     function slugify_url_path(url)
@@ -118,6 +125,7 @@ function Plugin.setup(app)
         
             return { status = 201, headers = headers, json = { success = true, message = "Item added successfully.", item=new_item } }
         end)
+    handler_post = compose(require_auth, rbac:with(perms.ITEMS_CREATE))(handler_post)
     -- app:post(base_path, handler_post)
 
     app:match(base_path, function(self)
@@ -137,7 +145,7 @@ function Plugin.setup(app)
     end)
     
     -- Endpoint: Edit a item for scraping (using code as identifier)
-    app:put(base_path .. "/:id", capture_bad_request_params_validate({
+    app:put(base_path .. "/:id", compose(require_auth, rbac:with(perms.ITEMS_UPDATE))(capture_bad_request_params_validate({
         {"id",types.db_id},
         {"name",types.valid_text},
         {"url",types.valid_text},
@@ -163,12 +171,12 @@ function Plugin.setup(app)
         end
 
         return { json = { success = true, message = "Item updated successfully." } }
-    end))
-    
+    end)))
+
     -- Endpoint: Remove a item for scraping (identified by id)
-    app:delete(base_path .. "/:id", function(self)
+    app:delete(base_path .. "/:id", compose(require_auth, rbac:with(perms.ITEMS_DELETE))(function(self)
         local id = self.params.id
-    
+
         if not id then
             return { status = 400, json = { error = "Missing item id." } }
         end
@@ -176,16 +184,16 @@ function Plugin.setup(app)
         local opr, err = models.Items:find({
             id=id
         }):delete()
-    
+
         if not opr then
             return { status = 500, json = { error = err or "Unable to remove item." } }
         end
-    
+
         return { json = { success = true, message = "Item removed successfully." } }
-    end)
+    end))
 
     -- Endpoint: Export sites data
-    app:get(base_path .. "/export", function(self)
+    app:get(base_path .. "/export", compose(require_auth, rbac:with(perms.ITEMS_READ))(function(self)
 
         local ok, result = pcall(function()
             local items = models.Items:select()
@@ -207,9 +215,9 @@ function Plugin.setup(app)
             layout = false,
             json = {description='Items configuration', items=result.items or {}}
         }
-    end)
+    end))
 
-    app:post(base_path .. "/import", function(self)
+    app:post(base_path .. "/import", compose(require_auth, rbac:with(perms.ITEMS_CREATE))(function(self)
 
         local file = self.params.file
 
@@ -245,7 +253,7 @@ function Plugin.setup(app)
         end
 
         return {json = { ok=ok_import, content=err }}
-    end)
+    end))
 end
 
 return Plugin

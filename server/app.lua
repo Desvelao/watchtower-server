@@ -27,6 +27,7 @@ app:get("/api", function()
 end)
 
 PluginSystem:new()
+    :add_plugin(require('plugins.security.plugin'))
     :add_plugin(require('plugins.alerting.plugin'))
     :add_plugin(require('plugins.monitoring.plugin'))
     :add_plugin(require('plugins.notification_channels.plugin'))
