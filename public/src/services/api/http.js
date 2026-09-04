@@ -44,13 +44,28 @@ export async function http(url, options = {}) {
     finalHeaders.set("Authorization", `Bearer ${auth.token}`);
   }
 
-  // If there is a body and the Content-Type header indicates JSON,
-  // automatically stringify the body if it's not already a string.
-  const reqContentType = finalHeaders.get("Content-Type");
+  // Any body that isn't already a string/FormData/Blob is treated as
+  // JSON: stringified, and (unless the caller already set their own
+  // Content-Type - Headers.has() is case-insensitive, so this respects
+  // e.g. services/api/products.js's explicit 'content-type' header
+  // unchanged) tagged application/json. Without this, a plain object body
+  // reaches fetch() un-stringified, which coerces it to the literal
+  // string "[object Object]" with no JSON content-type - the server's
+  // json_params middleware then never parses it, so params come back nil
+  // and fail validation (this is exactly what broke browser login: every
+  // Phase 6 api/*.js file ported from pibuzz passes a plain object body
+  // with no header at all, relying on this auto-detection like pibuzz's
+  // own http.js already did).
+  const isPlainBody =
+    body === undefined ||
+    typeof body === "string" ||
+    body instanceof FormData ||
+    body instanceof Blob;
   let finalBody = body;
-  if (body && reqContentType && reqContentType.includes("application/json")) {
-    if (typeof body !== "string") {
-      finalBody = JSON.stringify(body);
+  if (!isPlainBody) {
+    finalBody = JSON.stringify(body);
+    if (!finalHeaders.has("Content-Type")) {
+      finalHeaders.set("Content-Type", "application/json");
     }
   }
 
