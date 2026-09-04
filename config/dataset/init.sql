@@ -62,6 +62,14 @@ CREATE TABLE items (
   name VARCHAR(255) NOT NULL,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   url TEXT NOT NULL,
+  -- Rolled up from this item's 'scrape'-type jobs (see
+  -- plugins/jobs/services/jobs.lua's _rollup) - the FK to monitors is
+  -- added further down via ALTER TABLE, once that table exists.
+  last_scrape_status VARCHAR(255) DEFAULT NULL
+    CHECK (last_scrape_status IN ('pending', 'triggering', 'acknowledged', 'error')),
+  last_scrape_monitor VARCHAR(255) DEFAULT NULL,
+  last_scrape_take_at TIMESTAMP DEFAULT NULL,
+  last_scrape_ack_at TIMESTAMP DEFAULT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
@@ -143,6 +151,11 @@ CREATE TABLE monitor_heartbeats (
 );
 
 CREATE INDEX monitor_heartbeats_monitor_id_idx ON monitor_heartbeats (monitor_id, created_at);
+
+-- Deferred until here since items is created before monitors above.
+ALTER TABLE items
+  ADD CONSTRAINT items_last_scrape_monitor_fkey
+  FOREIGN KEY (last_scrape_monitor) REFERENCES monitors(monitor_id) ON DELETE SET NULL;
 
 -- Fired alerts - a status/priority state machine, not a definition. A
 -- definition is a `rules` row; this table holds one row per rule match
