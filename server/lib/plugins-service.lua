@@ -1,50 +1,15 @@
--- Topological sort with cycle detection
-local function resolve_order(manifests)
-  local graph, in_degree = {}, {}
-  -- Initialize nodes
-  for name, m in pairs(manifests) do
-    graph[name]     = {}
-    in_degree[name] = 0
-  end
-  -- Build edges
-  for name, m in pairs(manifests) do
-    for dep,_ in pairs(m.dependencies or {}) do
-      if not manifests[dep] then
-        error(("Plugin '%s' requires missing '%s'"):format(name, dep))
-      end
-      table.insert(graph[dep], name)
-      in_degree[name] = in_degree[name] + 1
-    end
-  end
-  -- Kahn’s algorithm
-  local queue, order = {}, {}
-  for name, deg in pairs(in_degree) do
-    if deg == 0 then table.insert(queue, name) end
-  end
-  while #queue > 0 do
-    local n = table.remove(queue, 1)
-    table.insert(order, n)
-    for _, m in ipairs(graph[n]) do
-      in_degree[m] = in_degree[m] - 1
-      if in_degree[m] == 0 then table.insert(queue, m) end
-    end
-  end
-  if #order ~= (#order + 0) then
-    error("Cycle detected in plugin dependencies")
-  end
-  return order
-end
-
-
+-- Plugin loader. Mirrors public/src/core/services/plugin-service.js (the
+-- frontend twin, which is the correct reference implementation) - manifests
+-- are an array of tables looked up by `.name`, `dependencies` is an array of
+-- plugin names, and cycle detection is a real length check.
 local PluginSystem = {}
 
 function PluginSystem:new()
-
   local instance = {
     __plugins = {},
-    __manifests = {}
+    __manifests = {},
   }
-  return setmetatable(instance, {__index=PluginSystem})
+  return setmetatable(instance, { __index = PluginSystem })
 end
 
 function PluginSystem:add_plugin(plugin)
@@ -52,44 +17,91 @@ function PluginSystem:add_plugin(plugin)
   return self
 end
 
-function PluginSystem:run(app)
+-- Kahn's algorithm over `manifest.dependencies` (an array of plugin names).
+-- Returns an ordered array of plugin names.
+local function resolve_order(manifests)
+  local graph, in_degree, by_name = {}, {}, {}
 
-  -- Discover
-  self:discover()
+  for _, m in ipairs(manifests) do
+    graph[m.name] = {}
+    in_degree[m.name] = 0
+    by_name[m.name] = m
+  end
 
-  -- Setup
-  self:run_by_plugin('setup', app)
+  for _, m in ipairs(manifests) do
+    for _, dep in ipairs(m.dependencies or {}) do
+      if not by_name[dep] then
+        error(("Plugin '%s' requires missing '%s'"):format(m.name, dep))
+      end
+      table.insert(graph[dep], m.name)
+      in_degree[m.name] = in_degree[m.name] + 1
+    end
+  end
 
+  local queue, order = {}, {}
+  for name, deg in pairs(in_degree) do
+    if deg == 0 then
+      table.insert(queue, name)
+    end
+  end
+
+  while #queue > 0 do
+    local n = table.remove(queue, 1)
+    table.insert(order, n)
+    for _, m in ipairs(graph[n]) do
+      in_degree[m] = in_degree[m] - 1
+      if in_degree[m] == 0 then
+        table.insert(queue, m)
+      end
+    end
+  end
+
+  if #order ~= #manifests then
+    error("Cycle detected in plugin dependencies")
+  end
+
+  return order, by_name
 end
 
 function PluginSystem:discover()
-  local order = resolve_order(self.__manifests)
+  local order, by_name = resolve_order(self.__manifests)
+
   for _, name in ipairs(order) do
-    local manifest = self.__manifests[name]
-    -- local ok, plugin = pcall(require, ("plugins.%s.plugin"):format(name))
-    -- if not ok or type(plugin) ~= "table" then
-    --   error(("Failed to load plugin '%s'"):format(name))
-    -- end
-    -- plugin.__meta = manifest
-    local plugin = manifest
-    table.insert(self.__plugins, plugin)
+    table.insert(self.__plugins, by_name[name])
   end
 
-  return self  
+  return self
 end
 
+-- Runs `method` on every plugin in dependency order, threading each
+-- plugin's return value into the plugins that declare it as a dependency
+-- (looked up by name, not array position). Returns the full results table
+-- keyed by plugin name, so PluginSystem:run(app) can hand services between
+-- plugins (e.g. the `security` plugin returns {auth, rbac, users, roles,
+-- perms}, consumed by any plugin declaring dependencies = {'security'}).
 function PluginSystem:run_by_plugin(method, app)
-  local deps={}
-  for k,plugin in pairs(self.__plugins) do
-    local plugin_deps = {};
+  local results = {}
+
+  for _, plugin in ipairs(self.__plugins) do
+    local plugin_deps = {}
+
     if plugin.dependencies then
-      for k,v in ipairs(plugin.dependencies) do
-        plugin_deps[v] = deps[v] 
+      for _, dep in ipairs(plugin.dependencies) do
+        plugin_deps[dep] = results[dep]
       end
     end
-    deps[plugin.name] = plugin[method](app, plugin_deps)
+
+    if type(plugin[method]) == "function" then
+      results[plugin.name] = plugin[method](app, plugin_deps)
+    end
   end
+
+  return results
 end
 
+function PluginSystem:run(app)
+  self:discover()
+  return self:run_by_plugin("setup", app)
+end
 
 return PluginSystem

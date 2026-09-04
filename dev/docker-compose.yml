@@ -7,16 +7,31 @@ services:
     container_name: lapis_app
     volumes:
       - ../server:/app # Mount the app for live editing
+      - ../shared:/shared # Shared worker/server Lua modules
+      - ../outputs:/etc/price-monitor/outputs # Worker config output (embedded worker)
       - ../docker/images/dev/lapis/entrypoint.sh:/entrypoint.sh:ro
     ports:
       - "8080:8080" # Expose the Lapis server on port 8080
     environment:
       LAPIS_ENV: development
+      LUA_PATH: "/shared/?.lua;/shared/?/init.lua;;"
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
+      # ===== AUTH =====
+      JWT_SECRET: ${JWT_SECRET:-supersecretjwt}
+      # Created (with the `admin` role) on server boot if a user with this
+      # username doesn't already exist yet - never overwrites an existing
+      # user's password. Idempotent, safe to leave set.
+      INITIAL_ADMIN_USERNAME: ${INITIAL_ADMIN_USERNAME:-admin}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-adminpass}
+      # ===== EMBEDDED WORKER =====
+      # Set to 1 to run the scrape worker inside this server process
+      # (ngx.timer) instead of/alongside the standalone `worker` service.
+      USE_EMBED_WORKER: ${USE_EMBED_WORKER:-0}
+      WORKER_CONFIG_FILE: ${WORKER_CONFIG_FILE:-/etc/price-monitor/outputs/worker_config.lua}
     entrypoint: ["sh", "/entrypoint.sh"]
     depends_on:
       db:
@@ -39,6 +54,32 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # Standalone scrape worker - polls the server's HTTP API for pending scrape
+  # jobs. Not started by default (comment `entrypoint` override out below to
+  # actually run it); exec in and run `lua main.lua` manually while
+  # iterating, same as pibuzz's dev workflow.
+  worker:
+    build:
+      context: ../docker/images/dev/worker
+    image: monitor-worker:dev
+    container_name: price-monitor-worker
+    volumes:
+      - ../worker/lua:/app
+      - ../shared:/shared
+      - ../outputs:/etc/price-monitor/outputs
+    environment:
+      LUA_PATH: "/shared/?.lua;/shared/?/init.lua;;"
+      # Placeholder - does not match any row in api_keys (init.sql seeds no
+      # data). Log in as admin and create a real key via
+      # POST /api/auth/api_key, then set SERVER_API_KEY to that value
+      # before starting this service for real.
+      SERVER_API_KEY: ${SERVER_API_KEY:-akey_00000000000000000000000000000000.0000000000000000000000000000000000000000000000000000000000000000}
+      WORKER_CONFIG_FILE: ${WORKER_CONFIG_FILE:-/etc/price-monitor/outputs/worker_config.lua}
+    entrypoint: ["tail", "-f", "/dev/null"]
+    depends_on:
+      db:
+        condition: service_healthy
 
   frontend:
     image: node:18-alpine

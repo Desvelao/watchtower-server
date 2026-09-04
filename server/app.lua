@@ -34,6 +34,4 @@ PluginSystem:new()
     :add_plugin(require('plugins.scraper_remote_config_lua.plugin'))
     :run(app)
 
--- require("plugins.healthcheck")(app)
-
 return app
