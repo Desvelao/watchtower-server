@@ -9,7 +9,7 @@ vi.mock("../services/api/auth", () => ({
 import * as authApi from "../services/api/auth";
 import { useAuthStore } from "./auth";
 
-const STORAGE_KEY = "price_monitor_auth";
+const STORAGE_KEY = "watchtower_auth";
 
 describe("useAuthStore", () => {
   beforeEach(() => {

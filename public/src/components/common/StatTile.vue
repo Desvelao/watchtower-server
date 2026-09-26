@@ -11,7 +11,7 @@ const props = defineProps({
 
 // Literal Tailwind class strings (not interpolated) so Tailwind's scanner
 // picks them all up - matches the pattern already used in
-// AlertPriorityBadge/AlertStatusBadge.
+// AlertSeverityBadge/AlertStatusBadge.
 const TONE_CLASSES = {
   neutral: {
     border: "border-slate-200 dark:border-slate-700",

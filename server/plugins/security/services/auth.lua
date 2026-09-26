@@ -112,7 +112,7 @@ function M:with(_config)
 
       -- Checked live on every request (not just at login), so disabling an
       -- account takes effect immediately for any already-issued token/key.
-      if config.require and user and user.enabled == false then
+      if user and user.enabled == false then
         return { status = 401, json = { error = "Unauthorized", message = "Account disabled" } }
       end
 

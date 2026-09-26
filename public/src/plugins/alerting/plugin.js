@@ -1,5 +1,6 @@
 import Component from './views/AlertsListView.vue';
 import { PERMISSIONS } from '../../constants/permissions';
+import IconBell from '../../components/common/icons/IconBell.vue';
 
 const plugin = {
   name: 'alerting',
@@ -8,7 +9,7 @@ const plugin = {
       route: '/alerts',
       component: Component,
       name: 'Alerts',
-      icon: 'mdi-bell-outline',
+      icon: IconBell,
       permission: PERMISSIONS.ALERTS_READ,
     });
   },

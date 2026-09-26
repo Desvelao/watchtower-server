@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import * as authApi from '../services/api/auth';
 
-const STORAGE_KEY = 'price_monitor_auth';
+const STORAGE_KEY = 'watchtower_auth';
 
 export const useAuthStore = defineStore('auth', {
   state: () => ({

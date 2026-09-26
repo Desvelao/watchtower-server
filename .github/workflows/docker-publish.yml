@@ -16,6 +16,16 @@ jobs:
       contents: read
       packages: write
 
+    strategy:
+      matrix:
+        include:
+          - component: server
+            dockerfile: docker/images/prod/server/Dockerfile
+            image: ${{ github.repository }}
+          - component: worker
+            dockerfile: docker/images/prod/worker/Dockerfile
+            image: ${{ github.repository }}-worker
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -31,7 +41,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ matrix.image }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -44,9 +54,9 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: docker/images/prod/server/Dockerfile
+          file: ${{ matrix.dockerfile }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component }}

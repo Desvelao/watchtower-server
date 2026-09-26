@@ -13,21 +13,25 @@ RUN yarn && yarn build
 FROM openresty/openresty:alpine
 
 # Install required packages: build tools, LuaRocks, and Lua development headers
-# Install Lapis using LuaRocks. lua-resty-jwt's transitive
-# resty.openssl.kdf dependency covers server/plugins/security's scrypt
-# needs with no extra package; luastash is the embedded worker's pipeline
-# runner (only loaded when USE_EMBED_WORKER=1).
-RUN apk add --no-cache build-base luarocks lua5.1-dev openssl-dev \
-    && luarocks-5.1 install lapis \
-    && luarocks-5.1 install tableshape \
-    && luarocks-5.1 install lua-resty-jwt \
-    && luarocks-5.1 install luastash
+RUN apk add --no-cache build-base luarocks lua5.1-dev openssl-dev git
+
+# Pinned dependency versions - see
+# docker/rockspecs/watchtower-server-deps-1.0-1.rockspec for the exact list
+# and per-rock rationale.
+COPY docker/rockspecs/watchtower-server-deps-1.0-1.rockspec /tmp/watchtower-server-deps-1.0-1.rockspec
+RUN luarocks-5.1 install --only-deps /tmp/watchtower-server-deps-1.0-1.rockspec \
+    && rm -f /tmp/watchtower-server-deps-1.0-1.rockspec
 
 # Copy Lapis app
 COPY server/ /app
 # Shared Lua modules (server + standalone worker) - see shared/README.md
 COPY shared/ /shared
-ENV LUA_PATH="/shared/?.lua;/shared/?/init.lua;;"
+# Includes /worker_plugins so the image is self-sufficient for the
+# WORKER_CONFIG_FILE `plugins` bind-mount pattern (see
+# docker/worker/worker_config.example.lua) under any orchestrator, not just
+# this repo's own prod/docker-compose.yml - the directory is a no-op if
+# nothing is mounted there.
+ENV LUA_PATH="/shared/?.lua;/shared/?/init.lua;/worker_plugins/?.lua;/worker_plugins/?/init.lua;;"
 
 WORKDIR /app
 
@@ -39,6 +43,14 @@ COPY --from=frontend-builder /frontend/dist ./static
 
 # Run the setup of the plugins
 RUN find $(pwd)/plugins -type f -name "setup.sh" -exec sh -c 'cd "$(dirname "$1")" && sh "$1"' _ {} \;
+
+# Dedicated, unprivileged service user - owns everything the running
+# server writes at runtime (nginx's pid/log files and temp dirs, Lapis's
+# compiled nginx.conf, all created under WORKDIR /app).
+RUN addgroup -g 1000 -S watchtower \
+    && adduser -S -D -H -u 1000 -G watchtower -s /sbin/nologin watchtower \
+    && chown -R watchtower:watchtower /app /shared
+USER watchtower
 
 # Expose port 8080 (if needed)
 EXPOSE 8080

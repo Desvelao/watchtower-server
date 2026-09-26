@@ -35,7 +35,7 @@ async function onSubmit() {
   <div
     class="mx-auto mt-16 max-w-sm rounded-lg border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800"
   >
-    <h1 class="text-xl font-semibold text-slate-900 dark:text-slate-100">Sign in to Price Monitor</h1>
+    <h1 class="text-xl font-semibold text-slate-900 dark:text-slate-100">Sign in to Watchtower</h1>
     <form class="mt-6 space-y-4" @submit.prevent="onSubmit">
       <div>
         <label class="block text-sm font-medium text-slate-700 dark:text-slate-300" for="username">Username</label>

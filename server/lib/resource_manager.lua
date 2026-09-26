@@ -12,7 +12,7 @@ end)
 
 local M = {}
 
--- model: a Lapis Model (e.g. models.Items)
+-- model: a Lapis Model (e.g. models.Observables)
 -- config:
 --   fields_query_params    - where_params array (see lib.routes), used for
 --                             both search() and its :count()
@@ -86,7 +86,27 @@ function M:search(request)
 end
 
 function M:find(item_id)
-    return self._model:find({ id = item_id })
+    -- Plain SELECT * (the default) goes straight through the model's own
+    -- :find - untouched for every consumer that doesn't configure
+    -- select_fields. A manager configured with select_fields (e.g.
+    -- alerting's alert_manager - see plugins/alerting/plugin.lua) instead
+    -- reuses that same fields expression here, the same way :search above
+    -- already does, so a single item's enriched/derived columns match what
+    -- the list/search endpoints return instead of silently falling back to
+    -- the bare table columns.
+    if self.select_fields == '*' then
+        return self._model:find({ id = item_id })
+    end
+
+    local table_name = db.escape_identifier(self._model:table_name())
+    local cond = db.encode_clause({ id = item_id })
+    local rows = db.select(self.select_fields .. " FROM " .. table_name .. " WHERE " .. cond .. " LIMIT 1")
+
+    if rows and rows[1] then
+        return self._model:load(rows[1])
+    end
+
+    return nil
 end
 
 function M:delete(item_id)

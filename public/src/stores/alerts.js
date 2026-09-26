@@ -5,12 +5,12 @@ import { relativeDateKeyword } from '../utils/date';
 export const useAlertsStore = createListStore('alerts', {
   filters: {
     id: '',
-    event_id: '',
-    status: '',
-    priority: '',
+    observation_id: '',
+    severity: '',
     source: '',
     tags: '',
     rule_id: '',
+    observable_type_id: '',
     search: '',
     created_after: relativeDateKeyword(24),
     created_before: '',

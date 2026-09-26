@@ -26,17 +26,39 @@ app:get("/api", function()
     return "Welcome to API"
 end)
 
+-- Unauthenticated liveness check for container/orchestrator health probes.
+-- Deliberately not wrapped in the security plugin's auth/rbac composition.
+app:get("/api/health", function()
+    ngx.update_time()
+    local start_time = ngx.now()
+
+    local db_ok = pcall(function() db.query("SELECT 1") end)
+
+    ngx.update_time()
+    local elapsed_ms = math.floor((ngx.now() - start_time) * 100000 + 0.5) / 100
+
+    return {
+        json = {
+            status = db_ok and "ok" or "degraded",
+            db = {
+                status = db_ok and "ok" or "error",
+                latency_ms = elapsed_ms,
+            },
+            latency_ms = elapsed_ms,
+        },
+    }
+end)
+
 PluginSystem:new()
     :add_plugin(require('plugins.security.plugin'))
     :add_plugin(require('plugins.rules.plugin'))
     :add_plugin(require('plugins.alerting.plugin'))
-    :add_plugin(require('plugins.events.plugin'))
-    :add_plugin(require('plugins.observations.plugin'))
-    :add_plugin(require('plugins.monitors.plugin'))
+    :add_plugin(require('plugins.entities.plugin'))
+    :add_plugin(require('plugins.workers.plugin'))
+    :add_plugin(require('plugins.scheduler.plugin'))
     :add_plugin(require('plugins.jobs.plugin'))
     :add_plugin(require('plugins.notification_channels.plugin'))
-    :add_plugin(require('plugins.items.plugin'))
-    :add_plugin(require('plugins.scraper_remote_config_lua.plugin'))
+    :add_plugin(require('plugins.observer_configs.plugin'))
     :run(app)
 
 return app

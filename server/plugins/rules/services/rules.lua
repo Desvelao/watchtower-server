@@ -1,92 +1,32 @@
+-- Rules: rows authored as a flat `name`/`if`/`severity`/... source document
+-- (see shared/rule_engine/source.lua). Everything generic - deriving a row
+-- from a document, CRUD, export, import, search - is lib/source_document_manager
+-- (shared with notification policies); this module supplies only what's
+-- specific to a rule.
 local db = require("lapis.db")
-local route_helpers = require("lib.routes")
-local rule_source = require("plugins.rules.services.rule_source")
-local rule_expr = require("rule_expr")
-local allowed_fields = require("plugins.rules.allowed_fields")
+local source_document_manager = require("lib.source_document_manager")
+local allowed_fields = require("rule_engine.allowed_fields")
 
 local M = {}
 
+local VALID_SEVERITIES = { low = true, medium = true, high = true, critical = true }
+
+-- The document keys a rule accepts.
 local ALLOWED_KEYS = {
   name = true,
   description = true,
   ["if"] = true,
-  action = true,
   severity = true,
   tags = true,
   enabled = true,
+  cooldown_seconds = true,
 }
 
-local VALID_SEVERITIES = { low = true, medium = true, high = true, critical = true }
-
-function M.new(rule_model, config)
-  local instance = {
-    _model = rule_model,
-    on_change = config and config.on_change,
-  }
-  return setmetatable(instance, { __index = M })
-end
-
--- Called after every successful create/update/delete so callers (e.g.
--- rule_engine's cache, see its `invalidate`) can react to a rules change.
-function M:_notify_change()
-  if self.on_change then
-    self.on_change()
-  end
-end
-
--- Parses+validates a raw rule `source` document into a flat row ready for
--- Model:create()/item:update(). Returns (row, nil) on success or
--- (nil, err_string) on any validation failure - the route layer uses this
--- to distinguish an expected 400 from a genuine 500.
-function M:_derive(source)
-  if type(source) ~= "string" or source == "" then
-    return nil, "source is required"
-  end
-
-  local fields, parse_err = rule_source.parse(source)
-  if not fields then
-    return nil, "Invalid rule source: " .. parse_err
-  end
-
-  for k in pairs(fields) do
-    if not ALLOWED_KEYS[k] then
-      return nil, "Unknown rule field: " .. k
-    end
-  end
-
-  local name = fields.name
-  if type(name) ~= "string" or name == "" then
-    return nil, "name is required"
-  end
-
-  local action = fields.action
-  if type(action) ~= "string" or action == "" then
-    return nil, "action is required"
-  end
-
-  local if_expr = fields["if"]
-  if type(if_expr) ~= "string" or if_expr == "" then
-    return nil, "if is required"
-  end
-  local _, expr_err = rule_expr.parse(if_expr, allowed_fields)
-  if expr_err then
-    return nil, "Invalid 'if' expression: " .. expr_err
-  end
-
-  local enabled = fields.enabled
-  if enabled == nil then
-    enabled = true
-  elseif type(enabled) ~= "boolean" then
-    return nil, "enabled must be true or false"
-  end
-
-  local description = fields.description
-  if description == nil or description == "" then
-    description = db.NULL
-  end
-
-  -- Optional: overrides the matched alert's severity/tags (see
-  -- services/rule_engine.lua).
+-- A rule's own keys: an optional severity (overrides the matched alert's,
+-- see services/rule_engine.lua) and an optional cooldown (suppresses
+-- re-alerting this rule for the same observable within this many seconds of
+-- it last firing - see shared/watchtower_worker_core/rule_matching.lua).
+local function derive_extra(fields)
   local severity = fields.severity
   if severity == nil or severity == "" then
     severity = db.NULL
@@ -94,124 +34,29 @@ function M:_derive(source)
     return nil, "severity must be one of low, medium, high, critical"
   end
 
-  local tags = fields.tags
-  if tags == nil or tags == "" then
-    tags = db.NULL
-  elseif type(tags) ~= "string" then
-    return nil, "tags must be a comma-separated string"
-  else
-    local tag_list = {}
-    for tag in tags:gmatch("[^,]+") do
-      local trimmed = tag:match("^%s*(.-)%s*$")
-      if trimmed ~= "" then
-        table.insert(tag_list, trimmed)
-      end
-    end
-    tags = #tag_list > 0 and db.array(tag_list) or db.NULL
+  local cooldown_seconds = fields.cooldown_seconds
+  if cooldown_seconds == nil or cooldown_seconds == "" then
+    cooldown_seconds = db.NULL
+  elseif type(cooldown_seconds) ~= "number" or cooldown_seconds < 0 then
+    return nil, "cooldown_seconds must be a non-negative number"
   end
 
-  return {
-    source = source,
-    name = name,
-    description = description,
-    condition_expression = if_expr,
-    action = action,
-    severity = severity,
-    tags = tags,
-    enabled = enabled,
-  },
-    nil
+  return { severity = severity, cooldown_seconds = cooldown_seconds }
 end
 
-function M:create(params)
-  local row, err = self:_derive(params.source)
-  if not row then
-    return nil, err
-  end
-  local item = self._model:create(row)
-  self:_notify_change()
-  return item, nil
-end
-
-function M:update(item_id, params)
-  local item = self._model:find({ id = item_id })
-  if not item then
-    return nil, "Rule not found"
-  end
-
-  local row, err = self:_derive(params.source)
-  if not row then
-    return nil, err
-  end
-
-  row.updated_at = db.format_date()
-
-  local ok = item:update(row)
-  if not ok then
-    return nil, "Update failed"
-  end
-
-  self:_notify_change()
-  return self._model:find({ id = item_id }), nil
-end
-
-function M:find(item_id)
-  return self._model:find({ id = item_id })
-end
-
-function M:delete(item_id)
-  local item = self._model:find({ id = item_id })
-  if not item then
-    error({ status = 404, message = "Rule not found" })
-  end
-  local result = item:delete()
-  self:_notify_change()
-  return result
-end
-
-function M:search(request)
-  local fields_query_params = { "id", "name", "action", "enabled" }
-  local fields_search_params = {
-    {
-      key = "name",
-      map_clause = function(p)
-        return route_helpers.escaped_like_clause("name", p.value)
-      end,
-    },
-    {
-      key = "description",
-      map_clause = function(p)
-        return route_helpers.escaped_like_clause("description", p.value)
-      end,
-    },
-    {
-      key = "action",
-      map_clause = function(p)
-        return route_helpers.escaped_like_clause("action", p.value)
-      end,
-    },
-  }
-
-  local params = {}
-  for _, v in ipairs(fields_query_params) do
-    table.insert(params, v)
-  end
-  table.insert(params, {
-    key = "search",
-    map_clause = route_helpers.create_search_map_clause(fields_search_params),
+-- config.on_change is called after every successful create/update/delete, so
+-- callers (rule_engine's cache, see its `invalidate`) can react to a change.
+function M.new(rule_model, config)
+  return source_document_manager.new(rule_model, {
+    label = "rule",
+    display_name = "Rule",
+    plural = "rules",
+    export_basename = "rules-export",
+    allowed_keys = ALLOWED_KEYS,
+    allowed_fields = allowed_fields,
+    derive_extra = derive_extra,
+    on_change = config and config.on_change,
   })
-
-  local where_params = params
-  local query = route_helpers.get_db_query_params_from_request_params(request, where_params)
-  local where_clause = route_helpers.get_db_where_clause_from_request_params(request, where_params)
-
-  local items = self._model:select(query)
-  local total_items = self._model:count(where_clause)
-
-  return {
-    items = items,
-    total_items = total_items,
-  }
 end
 
 return M

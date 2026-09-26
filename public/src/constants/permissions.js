@@ -2,20 +2,22 @@
 // sync. The catalog is fixed in code on purpose (see that file's header
 // comment); only role -> permission-set assignment is dynamic.
 export const PERMISSIONS = {
-  ITEMS_READ: 'items:read',
-  ITEMS_CREATE: 'items:create',
-  ITEMS_UPDATE: 'items:update',
-  ITEMS_DELETE: 'items:delete',
+  OBSERVABLES_READ: 'observables:read',
+  OBSERVABLES_CREATE: 'observables:create',
+  OBSERVABLES_UPDATE: 'observables:update',
+  OBSERVABLES_DELETE: 'observables:delete',
 
   OBSERVATIONS_READ: 'observations:read',
   OBSERVATIONS_CREATE: 'observations:create',
   OBSERVATIONS_DELETE: 'observations:delete',
 
-  EVENTS_READ: 'events:read',
-  EVENTS_CREATE: 'events:create',
-  EVENTS_DELETE: 'events:delete',
+  OBSERVABLE_TYPES_READ: 'observable_types:read',
+  OBSERVABLE_TYPES_CREATE: 'observable_types:create',
+  OBSERVABLE_TYPES_UPDATE: 'observable_types:update',
+  OBSERVABLE_TYPES_DELETE: 'observable_types:delete',
 
   ALERTS_READ: 'alerts:read',
+  ALERTS_CREATE: 'alerts:create',
   ALERTS_UPDATE: 'alerts:update',
   ALERTS_DELETE: 'alerts:delete',
 
@@ -24,18 +26,38 @@ export const PERMISSIONS = {
   RULES_UPDATE: 'rules:update',
   RULES_DELETE: 'rules:delete',
 
-  MONITORS_READ: 'monitors:read',
-  MONITORS_WRITE: 'monitors:write',
+  SCHEDULER_READ: 'scheduler:read',
+  SCHEDULER_CREATE: 'scheduler:create',
+  SCHEDULER_UPDATE: 'scheduler:update',
+  SCHEDULER_DELETE: 'scheduler:delete',
+
+  WORKERS_READ: 'workers:read',
+  WORKERS_WRITE: 'workers:write',
+  WORKERS_DELETE: 'workers:delete',
 
   JOBS_READ: 'jobs:read',
+  JOBS_CREATE: 'jobs:create',
+  JOBS_UPDATE: 'jobs:update',
+  JOBS_DELETE: 'jobs:delete',
 
   CHANNELS_READ: 'channels:read',
   CHANNELS_CREATE: 'channels:create',
   CHANNELS_UPDATE: 'channels:update',
   CHANNELS_DELETE: 'channels:delete',
 
-  SCRAPERS_READ: 'scrapers:read',
-  SCRAPERS_WRITE: 'scrapers:write',
+  POLICIES_READ: 'policies:read',
+  POLICIES_CREATE: 'policies:create',
+  POLICIES_UPDATE: 'policies:update',
+  POLICIES_DELETE: 'policies:delete',
+
+  DELIVERIES_READ: 'deliveries:read',
+  DELIVERIES_CREATE: 'deliveries:create',
+  DELIVERIES_UPDATE: 'deliveries:update',
+
+  OBSERVER_CONFIGS_READ: 'observer_configs:read',
+  OBSERVER_CONFIGS_CREATE: 'observer_configs:create',
+  OBSERVER_CONFIGS_UPDATE: 'observer_configs:update',
+  OBSERVER_CONFIGS_DELETE: 'observer_configs:delete',
 
   API_KEY_MANAGE: 'api_key:manage',
 

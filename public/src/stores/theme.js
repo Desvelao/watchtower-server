@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 
-const STORAGE_KEY = "price_monitor_theme";
+const STORAGE_KEY = "watchtower_theme";
 const VALID = ["light", "dark", "system"];
 const media = window.matchMedia("(prefers-color-scheme: dark)");
 

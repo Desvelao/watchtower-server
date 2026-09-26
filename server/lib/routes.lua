@@ -320,11 +320,32 @@ local function with_transaction(fn)
     error(results[2], 0)
 end
 
+-- `fields_query_params` entries for the `created_after`/`created_before` list
+-- filters every searchable table shares: an absolute or relative date (see
+-- resolve_relative_date) compared against the row's created_at column.
+local function created_after_param()
+    return {
+        key = "created_after",
+        map_clause = function(p)
+            return "created_at >= " .. db.escape_literal(resolve_relative_date(p.value))
+        end,
+    }
+end
+
+local function created_before_param()
+    return {
+        key = "created_before",
+        map_clause = function(p)
+            return "created_at <= " .. db.escape_literal(resolve_relative_date(p.value))
+        end,
+    }
+end
+
 -- Picks `keys` off `request.params` into a plain data table, resolving the
 -- copy-pasted "for _, item in ipairs({...}) do data[target] = params[key]
 -- end" loop repeated in every plugin's write handlers into one place. Each
 -- entry in `keys` is either a bare param name, or {param_name, target_key}
--- to rename it on the way into `data` (e.g. {"id", "item_id"}).
+-- to rename it on the way into `data` (e.g. {"id", "observable_id"}).
 local function pick_params(request, keys)
     local data = {}
     for _, item in ipairs(keys) do
@@ -351,5 +372,7 @@ return {
     error_response = error_response,
     with_error_handling = with_error_handling,
     pick_params = pick_params,
+    created_after_param = created_after_param,
+    created_before_param = created_before_param,
     with_transaction = with_transaction,
 }

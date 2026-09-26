@@ -53,9 +53,8 @@ export async function http(url, options = {}) {
   // string "[object Object]" with no JSON content-type - the server's
   // json_params middleware then never parses it, so params come back nil
   // and fail validation (this is exactly what broke browser login: every
-  // Phase 6 api/*.js file ported from pibuzz passes a plain object body
-  // with no header at all, relying on this auto-detection like pibuzz's
-  // own http.js already did).
+  // Phase 6 api/*.js file passes a plain object body with no header at
+  // all, relying on this auto-detection).
   const isPlainBody =
     body === undefined ||
     typeof body === "string" ||

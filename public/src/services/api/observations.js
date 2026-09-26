@@ -1,50 +1,29 @@
-import { http } from './http';
+import { http, buildQueryString } from './http';
+import { downloadFileFromResponse } from '../../utils/download';
 
 const base = '/api/observations';
 
-/**
- * Gets a list of items with pagination, search, and sorting options.
- * @param {GetListOptions} options
- * @returns
- */
-export async function getList(options = {}) {
-  const page = options.page || 1;
-  const itemsPerPage = options.itemsPerPage || 10;
-  const search = options.search;
-
-  let sortBy;
-  if (options.sortBy && options.sortBy[0]) {
-    const { key, order } = options.sortBy[0];
-    sortBy = `${key}:${order}`;
-  }
-  return await http(
-    `${base}?size=${itemsPerPage}&from=${(page - 1) * itemsPerPage}${sortBy ? '&sort=' + sortBy : ''}${search ? '&search=' + search : ''}`,
-    {
-      method: 'get',
-    },
-  );
+export async function listObservations(query = {}) {
+  const res = await http(`${base}${buildQueryString(query)}`);
+  return res.body; // { items, total_items }
 }
 
-export async function get(id) {
-  return await http(`${base}/${id}`, { method: 'get' });
+// There is no GET /api/observations/:id route - reuse the list route's
+// existing `id` filter instead (see server/plugins/entities/
+// observations_routes.lua's where_params).
+export async function getObservation(id) {
+  const { items } = await listObservations({ id });
+  return { item: items[0] || null };
 }
 
-export async function create(payload) {
-  return await http(`${base}`, {
-    method: 'post',
-    body: payload,
-    headers: { 'content-type': 'application/json' },
-  });
+export async function deleteObservation(id) {
+  const res = await http(`${base}/${id}`, { method: 'delete' });
+  return res.body; // { message }
 }
 
-export async function edit(id, payload) {
-  return await http(`${base}/${id}`, {
-    method: 'put',
-    body: payload,
-    headers: { 'content-type': 'application/json' },
-  });
-}
-
-export async function remove(id) {
-  return await http(`${base}/${id}`, { method: 'delete' });
+// `query` is expected to be a store's buildExportQuery(...) result - the
+// current filters/search/sort (no pagination) plus `format` ('json'|'csv').
+export async function exportObservationsFile(query = {}) {
+  const response = await http(`${base}/export${buildQueryString(query)}`, { method: 'get' });
+  downloadFileFromResponse(response, query.format === 'csv' ? 'export.csv' : 'export.json');
 }

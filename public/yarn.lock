@@ -414,11 +414,6 @@
   resolved "https://registry.yarnpkg.com/@marijn/find-cluster-break/-/find-cluster-break-1.0.4.tgz#42c2aea61cda307cdb1347444792452d7b5dbfb4"
   integrity sha512-Wy0V7+SGUjnF9/TkiM1hKVDPj7jKXduPNboMVtHTA8dySMURWqfg/JZ9E2Sq8JgSJmkl7k7Qe9FLeMSrSraWmQ==
 
-"@mdi/font@^7.4.47":
-  version "7.4.47"
-  resolved "https://registry.npmjs.org/@mdi/font/-/font-7.4.47.tgz"
-  integrity sha512-43MtGpd585SNzHZPcYowu/84Vz2a2g31TvPMTm9uTiCSWzaheQySUcSyUH/46fPnuPQWof2yd0pGBtzee/IQWw==
-
 "@napi-rs/wasm-runtime@^1.1.4":
   version "1.2.3"
   resolved "https://registry.yarnpkg.com/@napi-rs/wasm-runtime/-/wasm-runtime-1.2.3.tgz#97e3d45d7424dc5da1d4e32f3bf3b292f6c1b44c"
@@ -1541,11 +1536,6 @@ vue@^3.2.25, vue@^3.5.13:
     "@vue/runtime-dom" "3.5.13"
     "@vue/server-renderer" "3.5.13"
     "@vue/shared" "3.5.13"
-
-vuetify@^3.8.5:
-  version "3.8.5"
-  resolved "https://registry.npmjs.org/vuetify/-/vuetify-3.8.5.tgz"
-  integrity sha512-W/mTaNDyO6NRqAQmnkMUn9TYvRb//BPF/vk7h3+2xNJOyI9ev90JmYjrihOtb+6QDrB79wVUH0Y+0OjYK73GsA==
 
 w3c-keyname@^2.2.4:
   version "2.2.8"

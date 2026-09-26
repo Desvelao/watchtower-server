@@ -2,6 +2,7 @@ import RulesListView from './views/RulesListView.vue';
 import RuleFormView from './views/RuleFormView.vue';
 import RuleTestView from './views/RuleTestView.vue';
 import { PERMISSIONS } from '../../constants/permissions';
+import IconScript from '../../components/common/icons/IconScript.vue';
 
 const plugin = {
   name: 'rules',
@@ -10,7 +11,7 @@ const plugin = {
       route: '/rules',
       component: RulesListView,
       name: 'Rules',
-      icon: 'mdi-script-text-outline',
+      icon: IconScript,
       permission: PERMISSIONS.RULES_READ,
     });
     core.router.addRoute({

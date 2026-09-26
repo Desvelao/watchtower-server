@@ -1,0 +1,36 @@
+# Example systemd timer that triggers watchtower-worker.service.example
+# on a schedule. Copy both files to /etc/systemd/system/ (matching
+# basenames - a timer activates the .service unit sharing its name unless
+# Unit= below overrides it), then:
+#   systemctl daemon-reload
+#   systemctl enable --now watchtower-worker.timer
+#
+# See docs/dev/worker-configuration.md's "Running as a one-shot job
+# (cron / systemd)" section for what each pass actually does and its exit
+# code contract.
+
+[Unit]
+Description=Run the watchtower-server standalone worker one-shot pass on a schedule
+
+[Timer]
+# ADJUST: how often to fire. Per-minute is a reasonable default for a
+# worker declaring "observer" (queue mode)/"analyzer"/
+# "evaluator"/"deliver" roles, since a scheduler
+# task's own cron_expression (minute-level granularity) decides what's
+# actually pending - firing this timer faster than that buys nothing, and
+# firing slower just delays pickup of already-due work.
+OnCalendar=*-*-* *:*:00
+
+# Catch up on a missed firing (e.g. the host was off) the next time it
+# boots/the timer is reloaded, rather than silently skipping it.
+Persistent=true
+
+# Spreads actual start time by up to this many seconds to avoid every
+# service on a fleet of hosts firing in the same instant - harmless for a
+# single worker, useful if you template this unit across several hosts.
+RandomizedDelaySec=5
+
+Unit=watchtower-worker.service
+
+[Install]
+WantedBy=timers.target

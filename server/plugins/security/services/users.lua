@@ -1,6 +1,9 @@
 local db = require("lapis.db")
 local route_helpers = require("lib.routes")
 local password_hash = require("plugins.security.services.password_hash")
+local cjson = require("cjson")
+local zip_writer = require("lib.zip_writer")
+local zip_reader = require("lib.zip_reader")
 
 local M = {}
 
@@ -92,7 +95,14 @@ function M:_derive(params, is_create)
 end
 
 function M:list(request)
-  local fields_query_params = { "id", "username", "role_id", "enabled" }
+  local fields_query_params = {
+    "id",
+    "username",
+    "role_id",
+    "enabled",
+    route_helpers.created_after_param(),
+    route_helpers.created_before_param(),
+  }
   local fields_search_params = {
     {
       key = "username",
@@ -212,6 +222,180 @@ function M:delete(id)
     error({ status = 404, message = "User not found" })
   end
   return item:delete()
+end
+
+-- Filesystem-safe entry name for a user inside a multi-user export zip -
+-- same 3-line helper as plugins/rules/services/rules.lua's own slugify,
+-- duplicated rather than extracted for two call sites.
+local function slugify(name)
+  local slug = name:lower():gsub("[^%w]+", "-"):gsub("^%-+", ""):gsub("%-+$", "")
+  if slug == "" then
+    slug = "user"
+  end
+  return slug
+end
+
+-- A user exports as {username, role, enabled} - `role` by *name*, not
+-- role_id (so the export is portable to another environment where that id
+-- may not resolve to the same role), and deliberately no password field at
+-- all: password_hash is scrypt-derived and can never round-trip (see
+-- sanitize() above, which already strips it from every ordinary response
+-- too). `ids`, if given, is an array of user ids to export; nil/empty
+-- exports every user. Returns (content, content_type, filename) on
+-- success, or (nil, nil, nil, error_message) when nothing matches. A
+-- single matching user stays one .json file; 2+ are packed into a .zip
+-- (one .json per user) via lib/zip_writer - see
+-- plugins/rules/services/rules.lua's M:export for the identical shape.
+function M:export(ids)
+  local query = "order by id asc"
+  if ids and #ids > 0 then
+    local escaped = {}
+    for _, id in ipairs(ids) do
+      table.insert(escaped, db.escape_literal(tonumber(id)))
+    end
+    query = "where id in (" .. table.concat(escaped, ", ") .. ") order by id asc"
+  end
+
+  local items = self._model:select(query)
+
+  if #items == 0 then
+    return nil, nil, nil, "No users to export"
+  end
+
+  local function to_export(row)
+    return {
+      username = row.username,
+      role = self._roles:get_name(row.role_id),
+      enabled = row.enabled,
+    }
+  end
+
+  if #items == 1 then
+    return cjson.encode(to_export(items[1])), "application/json; charset=utf-8", "users-export.json"
+  end
+
+  local files = {}
+  for _, item in ipairs(items) do
+    table.insert(files, {
+      name = slugify(item.username) .. "-" .. item.id .. ".json",
+      content = cjson.encode(to_export(item)),
+    })
+  end
+  return zip_writer.build(files), "application/zip", "users-export.zip"
+end
+
+local ZIP_MAGIC = "PK\3\4" -- zip local-file-header signature
+
+-- Parses (but does not save) an uploaded user file or zip of user files -
+-- see plugins/rules/services/rules.lua's M:preflight_import for the
+-- identical shape/precedent (zip-magic-byte sniff, one candidate per
+-- entry). A user's `role` (exported by name) is resolved to a local
+-- role_id here; an unresolvable role surfaces as a per-candidate error,
+-- exactly like a bad rule `if` expression does, never a hard failure of
+-- the whole batch. Returns an array of either `{ file, error }` (failed to
+-- parse/resolve) or `{ file, username, role, role_id, enabled,
+-- conflict: {id, username}|nil }` (parsed ok, with an existing
+-- same-username user flagged for the caller to resolve). Nothing is
+-- written to the DB - see M:commit_import for that.
+function M:preflight_import(filename, bytes)
+  local entries
+  if bytes:sub(1, 4) == ZIP_MAGIC then
+    local files, err = zip_reader.read(bytes)
+    if not files then
+      return nil, "Could not read zip: " .. err
+    end
+    entries = files
+  else
+    entries = { { name = filename, content = bytes } }
+  end
+
+  local candidates = {}
+  for _, entry in ipairs(entries) do
+    local ok, payload = pcall(cjson.decode, entry.content)
+    if not ok or type(payload) ~= "table" then
+      table.insert(candidates, { file = entry.name, error = "Invalid JSON: " .. tostring(payload) })
+    else
+      local role = payload.role and payload.role ~= "" and self._roles:find_by_name(payload.role)
+      if not role then
+        table.insert(candidates, {
+          file = entry.name,
+          error = "Role '" .. tostring(payload.role) .. "' not found",
+        })
+      else
+        local row, derive_err = self:_derive({
+          username = payload.username,
+          role_id = role.id,
+          enabled = payload.enabled,
+        }, true)
+        if not row then
+          table.insert(candidates, { file = entry.name, error = derive_err })
+        else
+          local candidate = {
+            file = entry.name,
+            username = row.username,
+            role = role.name,
+            role_id = role.id,
+            enabled = row.enabled,
+          }
+          local existing = self._model:find({ username = row.username })
+          if existing then
+            candidate.conflict = { id = existing.id, username = existing.username }
+          end
+          table.insert(candidates, candidate)
+        end
+      end
+    end
+  end
+
+  return candidates
+end
+
+-- `items` is the frontend's resolved decisions from a preflight_import
+-- result: `{ username, role_id, enabled, action = "create" | "update",
+-- existing_id?, password? }[]`. Reuses M:create/M:update exactly as the
+-- single-user form does - no validation logic is duplicated here. An
+-- update never touches the password even if one was somehow sent; a
+-- create requires one, mirroring M:create's own "password is required"
+-- error. Any `action` other than exactly "create" or "update" (with a
+-- truthy `existing_id`) - including the documented "skip" option, nil, or a
+-- typo - is rejected as a no-op rather than falling through to create.
+-- Returns a parallel array of `{ ok, error? }`, one per item, never
+-- aborting the batch over one bad item (mirrors
+-- plugins/rules/services/rules.lua's own M:commit_import).
+function M:commit_import(items)
+  local results = {}
+  for _, item in ipairs(items) do
+    local ok, row, err = pcall(function()
+      if item.action == "update" and item.existing_id then
+        return self:update(item.existing_id, {
+          username = item.username,
+          role_id = item.role_id,
+          enabled = item.enabled,
+        })
+      elseif item.action == "create" then
+        if type(item.password) ~= "string" or item.password == "" then
+          return nil, "password is required"
+        end
+        return self:create({
+          username = item.username,
+          role_id = item.role_id,
+          enabled = item.enabled,
+          password = item.password,
+        })
+      end
+      return nil, "Unsupported action '" .. tostring(item.action) .. "' (expected 'create', or 'update' with existing_id)"
+    end)
+
+    if ok and row then
+      table.insert(results, { ok = true })
+    elseif ok then
+      table.insert(results, { ok = false, error = err })
+    else
+      local error_message = type(row) == "table" and row.message or tostring(row)
+      table.insert(results, { ok = false, error = error_message })
+    end
+  end
+  return results
 end
 
 return M

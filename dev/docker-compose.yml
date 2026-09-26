@@ -1,20 +1,23 @@
 version: "3.8"
 
 services:
-  lapis:
-    build: ../docker/images/dev/lapis
-    image: monitor-server:dev
-    container_name: lapis_app
+  server:
+    build:
+      context: ..
+      dockerfile: docker/images/dev/lapis/Dockerfile
+    image: watchtower-server:dev
+    container_name: watchtower-server-dev
     volumes:
       - ../server:/app # Mount the app for live editing
       - ../shared:/shared # Shared worker/server Lua modules
-      - ../outputs:/etc/price-monitor/outputs # Worker config output (embedded worker)
+      - ../worker_plugins:/worker_plugins # Third-party worker plugin modules (gitignored, empty by default) - see WORKER_CONFIG_FILE's plugins field
+      - ../worker_config:/etc/watchtower # Worker config (embedded worker)
       - ../docker/images/dev/lapis/entrypoint.sh:/entrypoint.sh:ro
     ports:
       - "8080:8080" # Expose the Lapis server on port 8080
     environment:
       LAPIS_ENV: development
-      LUA_PATH: "/shared/?.lua;/shared/?/init.lua;;"
+      LUA_PATH: "/shared/?.lua;/shared/?/init.lua;/worker_plugins/?.lua;/worker_plugins/?/init.lua;;"
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
@@ -28,10 +31,40 @@ services:
       INITIAL_ADMIN_USERNAME: ${INITIAL_ADMIN_USERNAME:-admin}
       INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-adminpass}
       # ===== EMBEDDED WORKER =====
-      # Set to 1 to run the scrape worker inside this server process
-      # (ngx.timer) instead of/alongside the standalone `worker` service.
-      USE_EMBED_WORKER: ${USE_EMBED_WORKER:-0}
-      WORKER_CONFIG_FILE: ${WORKER_CONFIG_FILE:-/etc/price-monitor/outputs/worker_config.lua}
+      # Enabled by default: runs the observe worker inside this server
+      # process (ngx.timer). Set to 0 to disable it (e.g. to run only the
+      # standalone `worker` service instead).
+      USE_EMBED_WORKER: ${USE_EMBED_WORKER:-1}
+      # Enabled by default: also runs the "scheduler" role's tick
+      # (scheduler_tasks evaluation) inside this server process -
+      # independent of USE_EMBED_WORKER (has no effect unless that's also
+      # 1, since the whole embedded-worker module only loads when it is).
+      # Set to 0 to disable just the scheduler tick.
+      USE_EMBED_SCHEDULER: ${USE_EMBED_SCHEDULER:-1}
+      # Enabled by default: also runs the "deliver" role's tick inside this
+      # server process - independent of USE_EMBED_WORKER. Set to 0 to
+      # disable just the deliver tick.
+      USE_EMBED_DELIVER: ${USE_EMBED_DELIVER:-1}
+      # Enabled by default: also runs the "evaluator"
+      # role's tick inside this server process - independent of
+      # USE_EMBED_WORKER/USE_EMBED_DELIVER. Set to 0 to disable just the
+      # evaluator tick (the "deliver" role would then have nothing new to
+      # send, since nothing would be enqueuing onto alert_deliveries).
+      USE_EMBED_EVALUATOR: ${USE_EMBED_EVALUATOR:-1}
+      WORKER_CONFIG_FILE: ${WORKER_CONFIG_FILE:-/etc/watchtower/worker_config.lua}
+      # ===== SMTP (email notifications) =====
+      # A single app-wide relay shared by every "email" notification
+      # channel - see docs/dev/worker-configuration.md. Resolved here for
+      # this embedded worker (sends via server/lib/resty_mail_notifier.lua,
+      # lua-resty-mail-based) and identically for the standalone `worker`
+      # service below (sends via pling.notifiers.email) - both can
+      # actually send.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_SSL: ${SMTP_SSL:-1}
     entrypoint: ["sh", "/entrypoint.sh"]
     depends_on:
       db:
@@ -39,7 +72,7 @@ services:
 
   db:
     image: postgres:14
-    container_name: monitor-server-db
+    container_name: watchtower-server-db-dev
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -55,28 +88,35 @@ services:
       timeout: 5s
       retries: 5
 
-  # Standalone scrape worker - polls the server's HTTP API for pending scrape
+  # Standalone observe worker - polls the server's HTTP API for pending observe
   # jobs. Not started by default (comment `entrypoint` override out below to
   # actually run it); exec in and run `lua main.lua` manually while
-  # iterating, same as pibuzz's dev workflow.
+  # iterating.
   worker:
     build:
       context: ..
       dockerfile: docker/images/dev/worker/Dockerfile
-    image: monitor-worker:dev
-    container_name: price-monitor-worker
+    image: watchtower-worker:dev
+    container_name: watchtower-worker-dev
     volumes:
       - ../worker/lua:/app
       - ../shared:/shared
-      - ../outputs:/etc/price-monitor/outputs
+      - ../worker_plugins:/worker_plugins # Third-party worker plugin modules (gitignored, empty by default) - see WORKER_CONFIG_FILE's plugins field
+      - ../worker_config:/etc/watchtower
     environment:
-      LUA_PATH: "/shared/?.lua;/shared/?/init.lua;;"
+      LUA_PATH: "/shared/?.lua;/shared/?/init.lua;/worker_plugins/?.lua;/worker_plugins/?/init.lua;;"
       # Placeholder - does not match any row in api_keys (init.sql seeds no
       # data). Log in as admin and create a real key via
       # POST /api/auth/api_key, then set SERVER_API_KEY to that value
       # before starting this service for real.
       SERVER_API_KEY: ${SERVER_API_KEY:-akey_00000000000000000000000000000000.0000000000000000000000000000000000000000000000000000000000000000}
-      WORKER_CONFIG_FILE: ${WORKER_CONFIG_FILE:-/etc/price-monitor/outputs/worker_config.lua}
+      WORKER_CONFIG_FILE: ${WORKER_CONFIG_FILE:-/etc/watchtower/worker_config.lua}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_SSL: ${SMTP_SSL:-1}
     entrypoint: ["tail", "-f", "/dev/null"]
     depends_on:
       db:

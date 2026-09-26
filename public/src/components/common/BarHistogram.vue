@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref } from "vue";
+import { formatDate } from "../../utils/date";
 
 // `buckets`: chronological, evenly-spaced, zero-filled array of
 // { time: Date, count: number } - one entry per bucket in the selected
@@ -143,14 +144,6 @@ function formatAxisLabel(date) {
 const hovered = computed(() =>
   hoveredIndex.value !== null ? bars.value[hoveredIndex.value] : null
 );
-
-// `bar.time` is already a real Date (computed client-side, not a raw
-// server timestamp string) - format it directly rather than through
-// utils/date.js's formatDate, which expects a string and would throw
-// trying to .replace() a Date.
-function formatTooltipTime(date) {
-  return date.toLocaleString(undefined, { hour12: false });
-}
 </script>
 
 <template>
@@ -233,11 +226,11 @@ function formatTooltipTime(date) {
         >
           {{ hovered.connected ? "Connected" : "No heartbeat" }}
         </span>
-        <span class="text-slate-500 dark:text-slate-400"> · {{ formatTooltipTime(hovered.time) }}</span>
+        <span class="text-slate-500 dark:text-slate-400"> · {{ formatDate(hovered.time) }}</span>
       </template>
       <template v-else>
         <span class="font-semibold text-slate-900 dark:text-slate-100">{{ hovered.count }}</span>
-        <span class="text-slate-500 dark:text-slate-400"> {{ unitLabel }} · {{ formatTooltipTime(hovered.time) }}</span>
+        <span class="text-slate-500 dark:text-slate-400"> {{ unitLabel }} · {{ formatDate(hovered.time) }}</span>
       </template>
     </div>
   </div>

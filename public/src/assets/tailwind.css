@@ -1,9 +1,5 @@
-/* Tailwind entry for the new (Pinia + Tailwind) plugins - security,
-   rules, events, monitors, jobs, alerting. The pre-existing plugins
-   (items, notification_channels, scrapers) stay on Vuetify and don't use
-   this; the two coexist since Tailwind's utility classes are scoped by
-   class name and don't touch Vuetify's own component classes. See
-   README.md's "Frontend" section. */
+/* Tailwind entry point - loaded once from main.js for the whole app. See
+   CLAUDE.md's "Frontend" section. */
 @import 'tailwindcss';
 
 @custom-variant dark (&:where(.dark, .dark *));
@@ -19,8 +15,8 @@ html.dark {
   --color-status-acknowledged: #22c55e;
   --color-status-error: #ef4444;
 
-  --color-priority-low: #64748b;
-  --color-priority-medium: #3b82f6;
-  --color-priority-high: #f97316;
-  --color-priority-critical: #ef4444;
+  --color-severity-low: #64748b;
+  --color-severity-medium: #3b82f6;
+  --color-severity-high: #f97316;
+  --color-severity-critical: #ef4444;
 }

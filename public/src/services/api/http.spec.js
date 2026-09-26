@@ -42,7 +42,7 @@ describe('http', () => {
     auth.token = 'tok123';
     fetch.mockResolvedValue(fakeResponse({ body: { ok: true } }));
 
-    await http('/api/items');
+    await http('/api/observables');
 
     const [, options] = fetch.mock.calls[0];
     expect(options.headers.get('Authorization')).toBe('Bearer tok123');
@@ -83,13 +83,13 @@ describe('http', () => {
 
   it('parses a JSON response body', async () => {
     fetch.mockResolvedValue(fakeResponse({ contentType: 'application/json', body: { items: [] } }));
-    const res = await http('/api/items');
+    const res = await http('/api/observables');
     expect(res.body).toEqual({ items: [] });
   });
 
   it('parses a text/* response body', async () => {
     fetch.mockResolvedValue(fakeResponse({ contentType: 'text/plain', body: 'hello' }));
-    const res = await http('/api/items/export');
+    const res = await http('/api/observables/export');
     expect(res.body).toBe('hello');
   });
 
@@ -127,7 +127,7 @@ describe('http', () => {
     const logoutSpy = vi.spyOn(auth, 'logout');
     fetch.mockResolvedValue(fakeResponse({ ok: false, status: 401, statusText: 'Unauthorized', body: {} }));
 
-    await expect(http('/api/items')).rejects.toThrow();
+    await expect(http('/api/observables')).rejects.toThrow();
 
     expect(logoutSpy).toHaveBeenCalledTimes(1);
   });

@@ -5,13 +5,13 @@
 local models = require("models")
 local route_helpers = require("lib.routes")
 local types = require("lapis.validate.types")
+local json_params = require("lapis.application").json_params
 
 local compose = route_helpers.compose
 local with_error_handling = route_helpers.with_error_handling
 local error_response = route_helpers.error_response
--- Same JSON-body validation every plugin already uses (see
--- lib/routes.lua), just under the name pibuzz's routes were written
--- against.
+-- Same JSON-body validation every plugin already uses (see lib/routes.lua),
+-- just under a shorter local alias.
 local with_json_body = route_helpers.capture_bad_request_params_validate
 
 local PERMS = require("plugins.security.permissions")
@@ -320,6 +320,94 @@ function Plugin.setup(app)
     end)
   )
 
+  -- Downloads matching users (all, or `?ids=1,2,3`) as a single .json file
+  -- (exactly one match) or a .zip of one .json per user (2+ matches) - see
+  -- services/users.lua's M:export. Mirrors plugins/rules/plugin.lua's own
+  -- GET /api/rules/export route verbatim.
+  app:get(
+    base_path .. "/users/export",
+    compose(
+      rate_limit:with(),
+      auth:with({ require = true }),
+      rbac:with(PERMS.USERS_READ),
+      with_error_handling("Failed to export users", "Failed to export users")
+    )(function(self)
+      local ids = nil
+      if self.params.ids and self.params.ids ~= "" then
+        ids = {}
+        for id_str in self.params.ids:gmatch("[^,]+") do
+          table.insert(ids, tonumber(id_str))
+        end
+      end
+
+      local content, content_type, filename, no_match_err = users:export(ids)
+
+      if not content then
+        return { status = 404, json = { message = no_match_err or "No users to export" } }
+      end
+
+      return {
+        status = 200,
+        content_type = content_type,
+        headers = { ["Content-Disposition"] = 'attachment; filename="' .. filename .. '"' },
+        layout = false,
+        content,
+      }
+    end)
+  )
+
+  -- Parses+validates an uploaded user file or zip of user files without
+  -- saving anything - see services/users.lua's M:preflight_import. `file`
+  -- is populated by Lapis' own multipart parsing, same as
+  -- plugins/rules/plugin.lua's own import/preflight route.
+  app:post(
+    base_path .. "/users/import/preflight",
+    compose(
+      rate_limit:with(),
+      auth:with({ require = true }),
+      rbac:with(PERMS.USERS_CREATE),
+      with_error_handling("Failed to preflight user import", "Failed to process upload")
+    )(function(self)
+      local file = self.params.file
+      if not file then
+        return { status = 400, json = { message = "File is missing." } }
+      end
+
+      local candidates, derive_err = users:preflight_import(file.filename, file.content)
+      if not candidates then
+        return { status = 400, json = { message = derive_err } }
+      end
+
+      return { status = 200, json = { items = candidates } }
+    end)
+  )
+
+  -- Commits a client-resolved decision array from a prior preflight:
+  -- `{ items: [{ username, role_id, enabled, action: "create"|"update",
+  -- existing_id?, password? }] }`. Gated on both USERS_CREATE and
+  -- USERS_UPDATE since a single batch can do either - see
+  -- services/users.lua's M:commit_import for the per-item, never-abort
+  -- handling.
+  app:post(
+    base_path .. "/users/import",
+    compose(
+      rate_limit:with(),
+      auth:with({ require = true }),
+      rbac:with(PERMS.USERS_CREATE),
+      rbac:with(PERMS.USERS_UPDATE),
+      with_error_handling("Failed to commit user import", "Failed to import users")
+    )(json_params(function(self)
+      local items = self.params.items
+      if type(items) ~= "table" then
+        return { status = 400, json = { message = "items must be an array" } }
+      end
+
+      local results = users:commit_import(items)
+
+      return { status = 200, json = { results = results } }
+    end))
+  )
+
   app:get(
     base_path .. "/roles",
     compose(
@@ -385,6 +473,93 @@ function Plugin.setup(app)
       roles:delete(self.params.id)
       return { status = 200, json = { message = "Role deleted" } }
     end)
+  )
+
+  -- Downloads matching roles (all, or `?ids=1,2,3`) as a single .json file
+  -- (exactly one match) or a .zip of one .json per role (2+ matches) - see
+  -- services/roles.lua's M:export. Mirrors plugins/rules/plugin.lua's own
+  -- GET /api/rules/export route verbatim.
+  app:get(
+    base_path .. "/roles/export",
+    compose(
+      rate_limit:with(),
+      auth:with({ require = true }),
+      rbac:with(PERMS.ROLES_READ),
+      with_error_handling("Failed to export roles", "Failed to export roles")
+    )(function(self)
+      local ids = nil
+      if self.params.ids and self.params.ids ~= "" then
+        ids = {}
+        for id_str in self.params.ids:gmatch("[^,]+") do
+          table.insert(ids, tonumber(id_str))
+        end
+      end
+
+      local content, content_type, filename, no_match_err = roles:export(ids)
+
+      if not content then
+        return { status = 404, json = { message = no_match_err or "No roles to export" } }
+      end
+
+      return {
+        status = 200,
+        content_type = content_type,
+        headers = { ["Content-Disposition"] = 'attachment; filename="' .. filename .. '"' },
+        layout = false,
+        content,
+      }
+    end)
+  )
+
+  -- Parses+validates an uploaded role file or zip of role files without
+  -- saving anything - see services/roles.lua's M:preflight_import. `file`
+  -- is populated by Lapis' own multipart parsing, same as
+  -- plugins/rules/plugin.lua's own import/preflight route.
+  app:post(
+    base_path .. "/roles/import/preflight",
+    compose(
+      rate_limit:with(),
+      auth:with({ require = true }),
+      rbac:with(PERMS.ROLES_CREATE),
+      with_error_handling("Failed to preflight role import", "Failed to process upload")
+    )(function(self)
+      local file = self.params.file
+      if not file then
+        return { status = 400, json = { message = "File is missing." } }
+      end
+
+      local candidates, derive_err = roles:preflight_import(file.filename, file.content)
+      if not candidates then
+        return { status = 400, json = { message = derive_err } }
+      end
+
+      return { status = 200, json = { items = candidates } }
+    end)
+  )
+
+  -- Commits a client-resolved decision array from a prior preflight:
+  -- `{ items: [{ name, permissions, action: "create"|"update",
+  -- existing_id? }] }`. Gated on both ROLES_CREATE and ROLES_UPDATE since a
+  -- single batch can do either - see services/roles.lua's M:commit_import
+  -- for the per-item, never-abort handling.
+  app:post(
+    base_path .. "/roles/import",
+    compose(
+      rate_limit:with(),
+      auth:with({ require = true }),
+      rbac:with(PERMS.ROLES_CREATE),
+      rbac:with(PERMS.ROLES_UPDATE),
+      with_error_handling("Failed to commit role import", "Failed to import roles")
+    )(json_params(function(self)
+      local items = self.params.items
+      if type(items) ~= "table" then
+        return { status = 400, json = { message = "items must be an array" } }
+      end
+
+      local results = roles:commit_import(items)
+
+      return { status = 200, json = { results = results } }
+    end))
   )
 
   return {

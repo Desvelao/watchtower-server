@@ -16,9 +16,16 @@ local WebhookNotificationChannels = Model:extend("notification_channels_webhook"
     }
 })
 
+local EmailNotificationChannels = Model:extend("notification_channels_email", {
+    relations= {
+        {"channel", belongs_to="notification_channels"}
+    }
+})
+
 nc.__relation_by_type = {
     discord = DiscordNotificationChannels,
-    webhook = WebhookNotificationChannels
+    webhook = WebhookNotificationChannels,
+    email = EmailNotificationChannels
 }
 
 function nc:get_resolver_options(record)

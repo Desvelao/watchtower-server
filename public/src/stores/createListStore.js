@@ -2,16 +2,38 @@ import { defineStore } from "pinia";
 import { isRelativeDateKeyword, localDateTimeToServerParam } from "../utils/date";
 
 // Builds a Pinia store definition for the shared "server-side
-// search/filter/sort/paginate" list-view shape used by alerts, events,
-// rules, and deliveries - state/buildQuery/fetchList/setFilter/setSort/
-// setPage/setPageSize/findById are identical across all four, so they live
-// here once. Only what varies per resource - the `filters` defaults, the
-// default `sort`, the list-fetching API function, and any extra
+// search/filter/sort/paginate" list-view shape used by alerts,
+// observations, rules, and deliveries - state/buildQuery/fetchList/
+// setFilter/setSort/setPage/setPageSize/findById are identical across all
+// four, so they live here once. Only what varies per resource - the
+// `filters` defaults, the default `sort`, the list-fetching API function, and any extra
 // resource-specific actions (create/remove/bulkRemove/...) - is passed in.
 //
-// created_after/created_before normalization in buildQuery runs
-// unconditionally; it's a no-op for stores (e.g. rules) whose `filters`
-// don't have those keys.
+// buildQuery's *_after/*_before normalization loop runs unconditionally
+// over every filter key; it's a no-op for stores (e.g. rules) whose
+// `filters` have no such keys.
+//
+// Shared by buildQuery (list fetch) and buildExportQuery (export download,
+// see below) - relative-date conversion + stripping empty/null/undefined
+// values so callers can pass `filters` straight through unfiltered.
+function normalizeQuery(query) {
+  for (const key of Object.keys(query)) {
+    if (
+      (key.endsWith("_after") || key.endsWith("_before")) &&
+      query[key] &&
+      !isRelativeDateKeyword(query[key])
+    ) {
+      query[key] = localDateTimeToServerParam(query[key]);
+    }
+  }
+  for (const key of Object.keys(query)) {
+    if (query[key] === "" || query[key] === null || query[key] === undefined) {
+      delete query[key];
+    }
+  }
+  return query;
+}
+
 export function createListStore(name, { filters, sort, listFn, actions: extraActions = {} } = {}) {
   return defineStore(name, {
     state: () => ({
@@ -25,19 +47,13 @@ export function createListStore(name, { filters, sort, listFn, actions: extraAct
     }),
     actions: {
       buildQuery() {
-        const query = { ...this.filters, sort: this.sort, ...this.pagination };
-        if (query.created_after && !isRelativeDateKeyword(query.created_after)) {
-          query.created_after = localDateTimeToServerParam(query.created_after);
-        }
-        if (query.created_before && !isRelativeDateKeyword(query.created_before)) {
-          query.created_before = localDateTimeToServerParam(query.created_before);
-        }
-        for (const key of Object.keys(query)) {
-          if (query[key] === "" || query[key] === null || query[key] === undefined) {
-            delete query[key];
-          }
-        }
-        return query;
+        return normalizeQuery({ ...this.filters, sort: this.sort, ...this.pagination });
+      },
+      // Same as buildQuery, but without pagination - an export should
+      // always cover every row matching the current filters/search/sort,
+      // not just the list view's current page.
+      buildExportQuery(extra = {}) {
+        return normalizeQuery({ ...this.filters, sort: this.sort, ...extra });
       },
       async fetchList() {
         this.loading = true;

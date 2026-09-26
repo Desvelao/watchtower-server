@@ -1,5 +1,6 @@
 import JobsListView from './views/JobsListView.vue';
 import { PERMISSIONS } from '../../constants/permissions';
+import IconTrigger from '../../components/common/icons/IconTrigger.vue';
 
 const plugin = {
   name: 'jobs',
@@ -8,7 +9,7 @@ const plugin = {
       route: '/jobs',
       component: JobsListView,
       name: 'Jobs',
-      icon: 'mdi-truck-delivery-outline',
+      icon: IconTrigger,
       permission: PERMISSIONS.JOBS_READ,
     });
   },

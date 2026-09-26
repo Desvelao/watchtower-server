@@ -2,10 +2,20 @@ version: "3.8"
 
 services:
   server:
-    image: ghcr.io/desvelao/watchtower-server:v0.0.1
-    container_name: monitor-server
+    # image: ghcr.io/desvelao/watchtower-server:v0.1.0
+    image: watchtower-server:latest
+    container_name: watchtower-server
     ports:
       - "8080:8080" # Expose the Lapis server on port 8080
+    volumes:
+      # Optional: third-party worker plugin modules - referenced by module
+      # path in WORKER_CONFIG_FILE's `plugins` field. Leave the host
+      # directory empty/absent if you have none; the image's own /shared
+      # (watchtower_observer_web_scraper.plugin included) still works either
+      # way. The image's own baked-in LUA_PATH (see
+      # docker/images/prod/server/Dockerfile) already resolves this mount -
+      # no environment override needed here.
+      - ${WORKER_PLUGINS_DIR:-./worker_plugins}:/worker_plugins
     environment:
       LAPIS_ENV: production
       POSTGRES_USER: ${POSTGRES_USER}
@@ -15,22 +25,85 @@ services:
       POSTGRES_PORT: 5432
       # DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       # ===== AUTH =====
-      JWT_SECRET: ${JWT_SECRET}
+      JWT_SECRET: ${JWT_SECRET:-watchtower-jwt-secret}
       # First admin account, bootstrapped idempotently on server boot -
       # leave unset (or ignore) once you've created your own admin user.
-      INITIAL_ADMIN_USERNAME: ${INITIAL_ADMIN_USERNAME:-}
-      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
+      INITIAL_ADMIN_USERNAME: ${INITIAL_ADMIN_USERNAME:-watchtower}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-watchtower}
       # ===== EMBEDDED WORKER =====
-      USE_EMBED_WORKER: ${USE_EMBED_WORKER:-0}
+      # Enabled by default. Set to 0 to disable it (e.g. to run only a
+      # standalone worker deployment instead).
+      USE_EMBED_WORKER: ${USE_EMBED_WORKER:-1}
+      # Enabled by default, independent of USE_EMBED_WORKER (no effect
+      # unless that's also 1). Set to 0 to disable just the scheduler tick.
+      USE_EMBED_SCHEDULER: ${USE_EMBED_SCHEDULER:-1}
+      # Enabled by default, independent of USE_EMBED_WORKER (no effect
+      # unless that's also 1). Set to 0 to disable just the deliver tick.
+      USE_EMBED_DELIVER: ${USE_EMBED_DELIVER:-1}
+      # Enabled by default, independent of USE_EMBED_WORKER/USE_EMBED_DELIVER
+      # (no effect unless USE_EMBED_WORKER is also 1). Set to 0 to disable
+      # just the evaluator tick.
+      USE_EMBED_EVALUATOR: ${USE_EMBED_EVALUATOR:-1}
       WORKER_CONFIG_FILE: ${WORKER_CONFIG_FILE:-}
+      # ===== SMTP (email notifications) =====
+      # A single app-wide relay shared by every "email" notification
+      # channel - see docs/dev/worker-configuration.md. NOTE: the embedded
+      # worker (the only one this compose file runs) does not actually
+      # send email yet - a LuaSocket/cosocket incompatibility, documented
+      # in that file - only a standalone worker with the "deliver" role
+      # can send today. Setting these here resolves config.deliver.smtp but
+      # has no effect on delivery until that's fixed.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_SSL: ${SMTP_SSL:-1}
     # command: lapis server development # Start Lapis in development mode
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Standalone observe worker - runs the same shared worker pipeline the
+  # embedded worker (server service, above) runs in-process, as a separate
+  # container instead. Commented out and not started by default: this
+  # repo's default production topology is the embedded worker
+  # (USE_EMBED_WORKER=1 on the server service above). Uncomment to run a
+  # standalone worker alongside it (e.g. to scale observing independently of
+  # the API server) or instead of it (set USE_EMBED_WORKER=0 on the server
+  # service too). See docs/dev/worker-configuration.md for what
+  # config.roles a standalone worker needs (default: {"observer"}).
+  worker:
+    # image: ghcr.io/desvelao/watchtower-worker:v0.1.0
+    image: watchtower-worker:latest
+    container_name: watchtower-worker
+    volumes:
+      - ${WORKER_CONFIG_DIR:-./worker_config}:/etc/watchtower
+      # Optional: third-party worker plugin modules - see the server
+      # service's own worker_plugins mount above (same mechanism, same
+      # WORKER_PLUGINS_DIR variable, same image-baked LUA_PATH default).
+      - ${WORKER_PLUGINS_DIR:-./worker_plugins}:/worker_plugins
+    environment:
+      # A real API key created via POST /api/auth/api_key for a
+      # user/role with the permissions this worker's config.roles needs -
+      # see docs/dev/worker-configuration.md. SERVER_API_KEY_FILE (a
+      # Docker secret) is also supported in place of this, same
+      # precedence chain the embedded worker uses.
+      SERVER_API_KEY: ${SERVER_API_KEY}
+      WORKER_CONFIG_FILE: ${WORKER_CONFIG_FILE:-/etc/watchtower/worker_config.lua}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_SSL: ${SMTP_SSL:-1}
     depends_on:
       db:
         condition: service_healthy
 
   db:
     image: postgres:14
-    container_name: monitor-server-db
+    container_name: watchtower-server-db
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -45,3 +118,5 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+# akey_a40189b7971de571994be993b97b1580.f56868f838b8704577776437ee1ff1c138a00682719a5f3e730224052cce8681

@@ -1,10 +1,10 @@
 local Model = require("lapis.db.model").Model
 
 -- Was Model:extend("monitoring") - table renamed to "observations" to free
--- "monitoring"/"monitors" for the scraping-agent registry
--- (server/models/monitors.lua).
+-- "monitoring"/"monitors" (now "workers") for the worker registry
+-- (server/models/workers.lua).
 return Model:extend("observations", {
     relations={
-        {"items", belongs_to="Items", key="item_id"}
+        {"observables", belongs_to="Observables", key="observable_id"}
     }
 })

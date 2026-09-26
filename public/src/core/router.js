@@ -7,12 +7,10 @@ const router = createRouter({
 });
 
 // Plugins register their own routes at boot (see core/services/app-service.js);
-// this guard applies uniformly to whatever they end up registering. A
-// route with no `meta.permission` and no `meta.public` (the pre-existing
-// Vuetify plugins - items, notification_channels, scrapers, observations -
-// none of which set either) is treated as open to any authenticated user,
-// same as before auth existed; only routes that opt into `meta.permission`
-// (the new plugins) get gated on it.
+// this guard applies uniformly to whatever they end up registering. A route
+// with no `meta.permission` and no `meta.public` is treated as open to any
+// authenticated user; only routes that opt into `meta.permission` get gated
+// on it.
 router.beforeEach((to) => {
   const auth = useAuthStore();
 
@@ -28,7 +26,11 @@ router.beforeEach((to) => {
   }
 
   if (to.meta.permission && !auth.can(to.meta.permission)) {
-    return { path: '/' };
+    // '/' itself now carries a permission (see entities/plugin.js), so
+    // redirecting a denied navigation there unconditionally would recurse
+    // forever for a user who also lacks that permission. Cancel instead of
+    // redirecting when '/' is already the (denied) target.
+    return to.path === '/' ? false : { path: '/' };
   }
 
   return true;

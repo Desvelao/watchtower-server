@@ -19,9 +19,14 @@ export function parseServerDate(value) {
   return new Date(toUtcIso(value));
 }
 
+// The one display formatter for timestamps: always renders in the browser's
+// own timezone/locale. Accepts a server timestamp string or an already-real
+// Date (e.g. a client-computed chart bucket).
 export function formatDate(value) {
   if (!value) return "-";
-  return new Date(toUtcIso(value)).toLocaleString(undefined, { hour12: false });
+  const date = value instanceof Date ? value : parseServerDate(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleString(undefined, { hour12: false });
 }
 
 // Write-side mirror of toUtcIso above: a <input type="datetime-local">
@@ -40,6 +45,18 @@ export function localDateTimeToServerParam(value) {
     `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ` +
     `${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`
   );
+}
+
+// Read-side mirror of localDateTimeToServerParam above: formats a server
+// timestamp (bare-UTC string) for direct use as a
+// <input type="datetime-local"> value (local wall-clock) - so prefilling a
+// form field with an already-saved server timestamp round-trips correctly
+// through the same UTC normalization every other date display uses.
+export function serverDateToLocalDateTimeValue(value) {
+  const date = parseServerDate(value);
+  if (!date || Number.isNaN(date.getTime())) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 // `minutes` ago, formatted for direct use as a <input type="datetime-local">
@@ -113,6 +130,7 @@ export const DATE_RANGE_PRESETS = [
   { key: "30d", label: "Last 30 days", hours: 24 * 30 },
   { key: "60d", label: "Last 60 days", hours: 24 * 60 },
   { key: "90d", label: "Last 90 days", hours: 24 * 90 },
+  { key: "all", label: "All time" }, // no `hours` - empty from/to, not a relative keyword
 ];
 
 export function formatUptime(seconds) {

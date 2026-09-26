@@ -1,50 +1,40 @@
-import { http } from './http';
+import { http, buildQueryString } from './http';
+import { downloadFileFromResponse } from '../../utils/download';
 
 const base = '/api/notification_channels';
 
-/**
- * Gets a list of items with pagination, search, and sorting options.
- * @param {GetListOptions} options
- * @returns
- */
-export async function getList(options = {}) {
-  const page = options.page || 1;
-  const itemsPerPage = options.itemsPerPage || 10;
-  const search = options.search;
-
-  let sortBy;
-  if (options.sortBy && options.sortBy[0]) {
-    const { key, order } = options.sortBy[0];
-    sortBy = `${key}:${order}`;
-  }
-  return await http(
-    `${base}?size=${itemsPerPage}&from=${(page - 1) * itemsPerPage}${sortBy ? '&sort=' + sortBy : ''}${search ? '&search=' + search : ''}`,
-    {
-      method: 'get',
-    },
-  );
+export async function listNotificationChannels(query = {}) {
+  const res = await http(`${base}${buildQueryString(query)}`);
+  return res.body; // { items, total_items }
 }
 
-export async function get(id) {
-  return await http(`${base}/${id}`, { method: 'get' });
+export async function getNotificationChannel(id) {
+  const res = await http(`${base}/${id}`);
+  return res.body; // { item }
 }
 
-export async function create(payload) {
-  return await http(`${base}`, {
-    method: 'post',
-    body: payload,
-    headers: { 'content-type': 'application/json' },
-  });
+export async function createNotificationChannel(payload) {
+  const res = await http(base, { method: 'post', body: payload });
+  return res.body; // { message, data }
 }
 
-export async function edit(id, payload) {
-  return await http(`${base}/${id}`, {
-    method: 'put',
-    body: payload,
-    headers: { 'content-type': 'application/json' },
-  });
+export async function updateNotificationChannel(id, payload) {
+  const res = await http(`${base}/${id}`, { method: 'put', body: payload });
+  return res.body; // { message, data }
 }
 
-export async function remove(id) {
-  return await http(`${base}/${id}`, { method: 'delete' });
+export async function deleteNotificationChannel(id) {
+  const res = await http(`${base}/${id}`, { method: 'delete' });
+  return res.body; // { message }
+}
+
+export async function exportNotificationChannelsFile() {
+  const response = await http(`${base}/export`, { method: 'get' });
+  downloadFileFromResponse(response, 'export.json');
+}
+
+export async function importNotificationChannelsFile(file) {
+  const formData = new FormData();
+  formData.append('file', file);
+  return http(`${base}/import`, { method: 'post', body: formData });
 }

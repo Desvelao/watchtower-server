@@ -1,10 +1,10 @@
 openapi: 3.0.3
 info:
-  title: price-monitor API
+  title: watchtower-server API
   description: |
-    HTTP API for price-monitor: items, scraper site definitions, notification
-    channels, a boolean-expression rule engine, and the monitor/job
-    registry a scraping worker (embedded or standalone) reports through.
+    HTTP API for watchtower-server: observables, notification
+    channels, a boolean-expression rule engine, and the worker/job
+    registry a worker (embedded or standalone) reports through.
 
     Every endpoint requires authentication - either a JWT bearer token
     (from `/api/auth/login`) or an API key (`x-api-key` header) - and,
@@ -20,30 +20,34 @@ security:
   - bearerAuth: []
   - apiKeyAuth: []
 tags:
+  - name: Health
+    description: Unauthenticated liveness check for container/orchestrator probes
   - name: Auth
     description: Login and API key management
   - name: Users
     description: DB-backed user accounts - the first admin is bootstrapped from INITIAL_ADMIN_USERNAME/INITIAL_ADMIN_PASSWORD
   - name: Roles
     description: Named permission sets assigned to users - the permission catalog is fixed in code, only role -> permission-set assignment is dynamic
-  - name: Items
-    description: The things being price-monitored
+  - name: ObservableTypes
+    description: Admin-defined schemas (properties + observation_schema) that Observables and Observations are validated against
+  - name: Observables
+    description: The things being tracked
   - name: Observations
-    description: Price observation ingest/history - posting one also creates a linked Event
-  - name: Events
-    description: Raw ingested data - the sole entry point for getting a fired Alert into the system
+    description: Price observation ingest/history - posting one is the sole entry point for getting a fired Alert into the system
   - name: Alerts
-    description: Fired alert instances (read + delete only - created as a side effect of an Event)
+    description: Fired alert instances (read + delete only - created as a side effect of an ingested Observation)
   - name: Rules
-    description: The condition DSL the RuleEngine matches against new Events
-  - name: Monitors
-    description: Scraping-agent registry - self-reported identity and health via heartbeat
+    description: The condition DSL the RuleEngine matches against new Observations
+  - name: Workers
+    description: Worker registry - self-reported identity and health via heartbeat
+  - name: Scheduler
+    description: Task definitions a "scheduler"-role worker evaluates (cron or one-shot), generating observe/analyze/notify/deliver work for the matching role
   - name: Jobs
-    description: One row per (monitor, type, ref) work assignment a monitor reports on
+    description: One row per (worker, type, ref) work assignment a worker reports on
   - name: NotificationChannels
     description: Discord/webhook destinations
-  - name: Scrapers
-    description: Remote-config Lua scraper site definitions
+  - name: NotificationPolicies
+    description: Routes fired Alerts to NotificationChannels, via the same condition DSL Rules use - evaluated by a scheduler task of type='notify'
 
 components:
   securitySchemes:
@@ -93,66 +97,121 @@ components:
         permissions:
           type: array
           items: { type: string }
-    Item:
+    PropertyDefinition:
+      type: object
+      description: >-
+        One entry of an observable type's `properties` or `observation_schema`
+        array. See docs/dev/observable-types-storage.md for the full
+        reference.
+      properties:
+        name:
+          type: string
+          description: Storage key within a properties object. Must match ^[a-z][a-z0-9_]*$.
+        label: { type: string }
+        type:
+          type: string
+          enum: [string, number, boolean, date, url, enum, map]
+        multiple:
+          type: boolean
+          description: If true, the value is an array of the base type.
+        required: { type: boolean }
+        searchable:
+          type: boolean
+          description: If true (string/url/enum types only), included in the resource's free-text search.
+        validations:
+          type: object
+          description: >-
+            Allowed keys depend on `type`: string/url -> minLength, maxLength,
+            pattern; number/date -> min, max; enum -> options (required,
+            non-empty array of strings); boolean -> none.
+    ObservableType:
       type: object
       properties:
         id: { type: integer }
         name: { type: string }
-        url: { type: string }
+        label: { type: string, nullable: true }
+        description: { type: string, nullable: true }
+        properties:
+          type: array
+          items: { $ref: '#/components/schemas/PropertyDefinition' }
+        observation_schema:
+          type: array
+          items: { $ref: '#/components/schemas/PropertyDefinition' }
+        created_at: { type: string }
+        updated_at: { type: string }
+    Observable:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        observable_type_id: { type: integer }
         enabled: { type: boolean }
-        last_scrape_status:
+        properties:
+          type: object
+          additionalProperties: true
+          description: Values keyed by property name, shaped by this observable's observable_type.properties.
+        last_observe_status:
           type: string
           enum: [pending, triggering, acknowledged, error]
           nullable: true
-        last_scrape_monitor: { type: string, nullable: true }
-        last_scrape_take_at: { type: string, nullable: true }
-        last_scrape_ack_at: { type: string, nullable: true }
+        last_observe_worker: { type: string, nullable: true }
+        last_observe_take_at: { type: string, nullable: true }
+        last_observe_ack_at: { type: string, nullable: true }
     Observation:
       type: object
       properties:
         id: { type: integer }
-        item_id: { type: integer }
-        price: { type: number }
-        discount: { type: string, nullable: true }
-        available: { type: boolean, nullable: true }
-        url: { type: string }
-        timestamp: { type: string }
-    Event:
-      type: object
-      properties:
-        id: { type: integer }
-        source: { type: string, nullable: true }
-        payload: { type: string, nullable: true }
-        tags:
-          type: array
-          items: { type: string }
+        observable_id: { type: integer }
+        properties:
+          type: object
+          additionalProperties: true
+          description: Values keyed by property name, shaped by the owning observable's observable_type.observation_schema.
+        worker:
+          type: string
           nullable: true
-        item_id: { type: integer, nullable: true }
-        alert_count: { type: integer }
-        created_at: { type: string }
+          description: >-
+            The worker_id that produced this observation - usable in rule definitions via the
+            generic `worker` field - see the Rules section.
+        timestamp: { type: string }
     Alert:
       type: object
       properties:
         id: { type: integer }
-        status:
-          type: string
-          enum: [inactive, pending, triggering, acknowledged, error]
-        priority:
+        severity:
           type: string
           enum: [low, medium, high, critical]
-        event_id: { type: integer }
-        pattern: { type: string, nullable: true }
+        observation_id: { type: integer }
         rule_id: { type: integer, nullable: true }
         rule_name: { type: string, nullable: true }
+        observable_type_id: { type: integer, nullable: true }
         tags:
           type: array
           items: { type: string }
           nullable: true
-        monitor: { type: string, nullable: true }
-        monitor_take_at: { type: string, nullable: true }
-        monitor_ack_at: { type: string, nullable: true }
         source: { type: string, nullable: true }
         payload: { type: string, nullable: true }
+        deliveries:
+          type: array
+          nullable: true
+          description: >-
+            One entry per (channel, alert) delivery attempt made by a
+            scheduler task of type='notify' that matched this alert against
+            a notification_policies channel - null/empty means no channel
+            has matched yet. This is a join onto the sibling
+            alert_deliveries table, not a column on the alert itself: alerts
+            record what fired, not whether/how it was delivered.
+          items:
+            type: object
+            properties:
+              channel_id: { type: integer }
+              notified_at:
+                type: string
+                nullable: true
+                description: >-
+                  Set once this specific channel's send for this alert
+                  succeeded. Null means still eligible - the next notify
+                  firing retries just this channel.
+              status: { type: string, nullable: true, enum: [pending, triggering, sent, error] }
         created_at: { type: string }
     Rule:
       type: object
@@ -164,7 +223,6 @@ components:
           type: string
           description: The flat rule document this row was parsed from (see CLAUDE.md's Rules section).
         condition_expression: { type: string }
-        action: { type: string }
         severity:
           type: string
           enum: [low, medium, high, critical]
@@ -174,10 +232,17 @@ components:
           items: { type: string }
           nullable: true
         enabled: { type: boolean }
-    Monitor:
+        cooldown_seconds:
+          type: integer
+          nullable: true
+          minimum: 0
+          description: >-
+            Suppresses creating another alert for the same rule+observable within
+            this many seconds of the last one. Null/0 means no cooldown.
+    Worker:
       type: object
       properties:
-        monitor_id: { type: string }
+        worker_id: { type: string }
         connection_type:
           type: string
           enum: [http, mqtt, embedded]
@@ -186,30 +251,232 @@ components:
           type: array
           items: { type: string }
           nullable: true
-        item_filter: { type: string, nullable: true }
         config: { type: string, nullable: true }
         uptime_seconds: { type: integer, nullable: true }
+        roles:
+          type: array
+          items: { type: string, enum: [analyzer, observer, deliver, scheduler, evaluator] }
+          nullable: true
+          description: >-
+            Fixed, hardcoded roles this worker self-reports - a worker can have more than
+            one (e.g. the embedded worker reports both "observer" and "analyzer", since it observes
+            and runs rule matching in the same process).
+        properties:
+          type: object
+          additionalProperties: true
+          description: >-
+            Role-specific self-reported metadata, validated against the combination of every
+            declared role's fixed property schema (see
+            server/plugins/workers/worker_role_schemas.lua) - e.g. an "analyzer"-role worker
+            reports `observations_analyzed`.
         last_seen_at: { type: string }
     Job:
       type: object
       properties:
         id: { type: integer }
-        monitor_id: { type: string }
+        worker_id: { type: string }
         type:
           type: string
-          enum: [scrape, notify]
-        ref_id: { type: integer }
+          enum: [observe, analyze, notify, deliver, observer_test]
+        ref_id:
+          type: integer
+          description: >-
+            Polymorphic per type (not an FK - application code owns its
+            integrity). For type='observe', ref_id is usually an observables.id
+            (one ordinary per-observable observe, from_scheduler=false) but can
+            also be a scheduler_tasks.id (from_scheduler=true): the single
+            aggregate job a scheduler task firing queues (see PUT
+            /api/scheduler/fire-due/.../claim) has no per-observable job of its
+            own, and ref_id there identifies the task, not an observable.
+            type='analyze'/'notify'/'deliver' are exclusively scheduler-fired,
+            so ref_id is always a scheduler_tasks.id (from_scheduler is always
+            true) for those. For type='observer_test', ref_id is an
+            observer_config_test_requests.id.
+        from_scheduler:
+          type: boolean
+          description: >-
+            True for the single aggregate job a scheduler task firing
+            queues (ref_id is then a scheduler_tasks.id, never an observables.id).
+            The only type this varies for is 'observe' - 'analyze'/'notify'/
+            'deliver' are always true, 'observer_test' is always false. Disambiguates
+            ref_id's polymorphism (see above) and drives GET /api/jobs'
+            observable_type_id filter.
         status:
           type: string
           enum: [pending, triggering, acknowledged, error]
         message: { type: string, nullable: true }
         action: { type: string, nullable: true }
+        result:
+          type: object
+          nullable: true
+          description: >-
+            Arbitrary JSON payload a report can carry back - type='observer_test'
+            populates this with the observed {ok, data} result; a scheduler
+            task's aggregate type='observe'/'analyze' job populates it with
+            {succeeded, failed, total, failures, ...}; a type='notify' job
+            (the "evaluator" role) populates it with
+            {enqueued, alerts_matched} - the evaluator worker's own matching
+            pass enqueued that many (alert, channel) pairs onto the
+            alert_deliveries queue, this job never carries any
+            per-channel send outcome (see PUT /api/alert_deliveries/report
+            for where those land instead, reported by the separate
+            "deliver" role).
         retries: { type: integer }
         taken_at: { type: string, nullable: true }
         acked_at: { type: string, nullable: true }
         error_at: { type: string, nullable: true }
+    SchedulerTask:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        type:
+          type: string
+          enum: [observe, analyze, notify, deliver]
+          description: >-
+            What kind of work this task fires. observe/analyze target a set
+            of observables (observable_type_id + observable_ids); notify targets a
+            notification-policy pass (notify_policy_ids); deliver has no
+            target of its own at all - it drains whatever's currently
+            pending on the alert_deliveries queue, an alternative to a
+            "deliver" worker's own independent alert_deliveries polling
+            (see that worker's deliver.source config). Immutable after
+            creation.
+        observable_type_id:
+          type: integer
+          nullable: true
+          description: Required for observe/analyze; null for notify/deliver.
+        observable_ids:
+          type: array
+          items: { type: integer }
+          nullable: true
+          description: >-
+            observe/analyze only. NULL/empty = wildcard (every enabled observable
+            of observable_type_id).
+        notify_policy_ids:
+          type: array
+          items: { type: integer }
+          nullable: true
+          description: >-
+            notify only. NULL/empty = every enabled notification_policies
+            row; non-empty = only these specific policy ids.
+        schedule_type:
+          type: string
+          enum: [cron, one_shot]
+        cron_expression: { type: string, nullable: true }
+        run_at: { type: string, nullable: true }
+        enabled: { type: boolean }
+        next_run_at: { type: string, nullable: true }
+        last_run_at: { type: string, nullable: true }
+        created_at: { type: string }
+        updated_at: { type: string }
+    NotificationPolicy:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        source:
+          type: string
+          description: >-
+            The flat policy document this row was parsed from
+            (name/if/channels/description/tags/enabled - the same
+            key:value document shape as a Rule's `source`, see CLAUDE.md's
+            Rules section and shared/rule_engine/source.lua, reused
+            unchanged).
+        condition_expression:
+          type: string
+          description: >-
+            The `if` expression, evaluated against an alert's own fields
+            (severity/tags/rule_id/observable_id) - not an observation's
+            payload. `severity`'s `>`/`<`/`>=`/`<=` rank semantically as
+            low < medium < high < critical (not alphabetically); `severity`,
+            `rule_id` and `observable_id` also support `in (v1, v2, ...)`.
+        channel_ids:
+          type: array
+          items: { type: integer }
+          description: notification_channels ids this policy routes a matching alert to.
+        tags:
+          type: array
+          items: { type: string }
+          nullable: true
+        enabled: { type: boolean }
+        created_at: { type: string }
+        updated_at: { type: string }
+    AlertDelivery:
+      type: object
+      description: >-
+        One row per (alert, channel) in the durable delivery queue -
+        enqueued by the evaluator worker role (see
+        shared/watchtower_worker_core/notification_policy_matcher.lua) and
+        claimed/sent by the deliver role
+        (see plugins/notification_channels/services/delivery_queue.lua).
+        Deliberately not columns on Alert itself; alert_id/channel_id
+        together are this resource's primary key, so there's no scalar `id`
+        field.
+      properties:
+        alert_id: { type: integer }
+        channel_id: { type: integer }
+        channel_name: { type: string }
+        channel_type: { type: string, enum: [discord, webhook] }
+        alert_severity: { type: string, enum: [low, medium, high, critical] }
+        rule_name: { type: string, nullable: true }
+        status:
+          type: string
+          enum: [pending, triggering, sent, error]
+          description: >-
+            pending = enqueued, not yet claimed by a deliver worker; triggering =
+            claimed, being sent now; sent = terminal success; error =
+            terminal for this attempt only - the next
+            evaluator pass resets it back to pending
+            for retry.
+        worker_id:
+          type: string
+          nullable: true
+          description: The deliver worker_id that last claimed this row, if any.
+        taken_at: { type: string, nullable: true }
+        notified_at:
+          type: string
+          nullable: true
+          description: Set once this channel's send for this alert succeeded.
+        error_message: { type: string, nullable: true }
+        updated_at: { type: string }
 
 paths:
+  /api/health:
+    get:
+      tags: [Health]
+      summary: Liveness check
+      description: |
+        Unauthenticated liveness probe for container/orchestrator health checks.
+        Always returns 200; DB connectivity failure is reflected in the body
+        rather than as an HTTP error status, so the probe itself never flaps.
+      security: []
+      responses:
+        "200":
+          description: OK (check `status`/`db.status` in the body for actual health)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [ok, degraded]
+                    description: "\"degraded\" when the DB check failed."
+                  db:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                        enum: [ok, error]
+                      latency_ms:
+                        type: number
+                        description: Time taken by the DB connectivity check (SELECT 1), in milliseconds.
+                  latency_ms:
+                    type: number
+                    description: Total request handling time, in milliseconds.
+
   /api/auth/login:
     post:
       tags: [Auth]
@@ -478,17 +745,15 @@ paths:
         "200": { description: OK }
         "400": { description: Role is still assigned to one or more users }
 
-  /api/items:
+  /api/observable_types:
     get:
-      tags: [Items]
-      summary: List items
+      tags: [ObservableTypes]
+      summary: List observable types
       parameters:
-        - { name: from, in: query, schema: { type: integer } }
-        - { name: size, in: query, schema: { type: integer } }
-        - { name: enabled, in: query, schema: { type: boolean } }
         - { name: name, in: query, schema: { type: string } }
         - { name: search, in: query, schema: { type: string } }
-        - { name: sort, in: query, schema: { type: string }, example: "name:asc" }
+        - { name: created_after, in: query, schema: { type: string } }
+        - { name: created_before, in: query, schema: { type: string } }
       responses:
         "200":
           description: OK
@@ -497,57 +762,154 @@ paths:
               schema:
                 type: object
                 properties:
-                  items: { type: array, items: { $ref: "#/components/schemas/Item" } }
+                  items: { type: array, items: { $ref: "#/components/schemas/ObservableType" } }
                   total_items: { type: integer }
     post:
-      tags: [Items]
-      summary: Create an item
+      tags: [ObservableTypes]
+      summary: Create an observable type
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [url]
+              required: [name]
               properties:
-                name: { type: string, description: "Defaults to a slug derived from the URL when omitted." }
-                url: { type: string }
-                enabled: { type: boolean }
+                name: { type: string }
+                label: { type: string }
+                description: { type: string }
+                properties: { type: array, items: { $ref: "#/components/schemas/PropertyDefinition" } }
+                observation_schema: { type: array, items: { $ref: "#/components/schemas/PropertyDefinition" } }
       responses:
         "201": { description: Created }
+        "400": { description: Invalid property/observation_schema definition }
+        "409": { description: An observable type with this name already exists }
 
-  /api/items/{id}:
+  /api/observable_types/{id}:
     get:
-      tags: [Items]
-      summary: Get an item
+      tags: [ObservableTypes]
+      summary: Get an observable type
       parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
       responses:
         "200": { description: OK }
         "404": { description: Not found }
     put:
-      tags: [Items]
-      summary: Update an item
+      tags: [ObservableTypes]
+      summary: >-
+        Update an observable type. Does not retroactively re-validate existing
+        observables/observations already using this type - see
+        docs/dev/observable-types-storage.md.
       parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
       responses:
         "200": { description: OK }
     delete:
-      tags: [Items]
-      summary: Delete an item
+      tags: [ObservableTypes]
+      summary: Delete an observable type (fails if any observable still uses it)
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK }
+        "409": { description: One or more observables still use this observable type }
+
+  /api/observables:
+    get:
+      tags: [Observables]
+      summary: List observables
+      description: >-
+        `observable_type_id` scopes the list to one type, which also unlocks
+        per-property filtering via `properties.<name>` (exact/contains
+        match), `properties.<name>.gt|.gte|.lt|.lte` (range, number/date
+        properties only), and extends `search` to that type's `searchable`
+        properties. See docs/dev/observable-types-storage.md.
+      parameters:
+        - { name: from, in: query, schema: { type: integer } }
+        - { name: size, in: query, schema: { type: integer } }
+        - { name: enabled, in: query, schema: { type: boolean } }
+        - { name: name, in: query, schema: { type: string } }
+        - { name: observable_type_id, in: query, schema: { type: integer } }
+        - { name: search, in: query, schema: { type: string } }
+        - { name: sort, in: query, schema: { type: string }, example: "name:asc" }
+        - { name: created_after, in: query, schema: { type: string } }
+        - { name: created_before, in: query, schema: { type: string } }
+        - { name: updated_after, in: query, schema: { type: string } }
+        - { name: updated_before, in: query, schema: { type: string } }
+        - name: properties.<name>
+          in: query
+          schema: { type: string }
+          description: Dynamic - one per property of the selected observable_type_id. Not a literal param name.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Observable" } }
+                  total_items: { type: integer }
+    post:
+      tags: [Observables]
+      summary: Create an observable
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [observable_type_id]
+              properties:
+                name:
+                  type: string
+                  description: >-
+                    Required unless observable_type_id declares a url-typed
+                    property and properties includes it, in which case it
+                    defaults to a slug derived from that URL.
+                observable_type_id: { type: integer }
+                enabled: { type: boolean }
+                properties:
+                  type: object
+                  additionalProperties: true
+                  description: Validated against observable_type_id's properties schema.
+      responses:
+        "201": { description: Created }
+        "400": { description: properties failed validation against the observable type's schema }
+        "404": { description: observable_type_id not found }
+
+  /api/observables/{id}:
+    get:
+      tags: [Observables]
+      summary: Get an observable
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK }
+        "404": { description: Not found }
+    put:
+      tags: [Observables]
+      summary: Update an observable (observable_type_id is immutable after creation)
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK }
+    delete:
+      tags: [Observables]
+      summary: Delete an observable
       parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
       responses:
         "200": { description: OK }
 
-  /api/items/export:
+  /api/observables/export:
     get:
-      tags: [Items]
-      summary: Export all items as a JSON file
+      tags: [Observables]
+      summary: Export all observables as a JSON file
       responses:
         "200": { description: OK }
 
-  /api/items/import:
+  /api/observables/import:
     post:
-      tags: [Items]
-      summary: Import items from a previously exported JSON file
+      tags: [Observables]
+      summary: >-
+        Import observables from a previously exported JSON file. A row whose
+        properties fail validation against its observable_type_id is skipped
+        and counted in the response's `failed` count rather than aborting
+        the whole import.
       requestBody:
         content:
           multipart/form-data:
@@ -560,9 +922,21 @@ paths:
   /api/observations:
     get:
       tags: [Observations]
-      summary: List price observations
+      summary: List observations
+      description: >-
+        Same `observable_type_id` / `properties.<name>[.gt|.gte|.lt|.lte]` /
+        `search` convention as GET /api/observables, scoped by the owning observable's
+        observable type's `observation_schema` instead of `properties`.
       parameters:
         - { name: id, in: query, schema: { type: integer } }
+        - { name: observable_id, in: query, schema: { type: integer } }
+        - { name: observable_type_id, in: query, schema: { type: integer } }
+        - { name: worker, in: query, schema: { type: string } }
+        - { name: timestamp_after, in: query, schema: { type: string } }
+        - { name: timestamp_before, in: query, schema: { type: string } }
+        - { name: sort, in: query, schema: { type: string }, description: "e.g. timestamp:desc" }
+        - { name: from, in: query, schema: { type: integer } }
+        - { name: size, in: query, schema: { type: integer } }
         - { name: search, in: query, schema: { type: string } }
       responses:
         "200":
@@ -576,27 +950,48 @@ paths:
                   total_items: { type: integer }
     post:
       tags: [Observations]
-      summary: Ingest a price observation
+      summary: Ingest an observable-type observation
       description: >-
-        Also creates a linked Event (source = the item's name, payload =
-        this observation as JSON), which runs through the rule engine and
-        may fire one or more Alerts.
+        Validates the observation's `properties` against the observable type's
+        observation_schema and stores it. It deliberately does NOT run rule
+        matching (an API route never evaluates rules): alerts for it are
+        created asynchronously by whichever "analyzer"-role worker is
+        configured, either sweeping every enabled observable or claiming a
+        scheduler-fired type='analyze' task, matching each observable's latest
+        stored observation (source = the observable's name, payload = its
+        stored properties as JSON) against every enabled rule. Any observable
+        type's fields are reachable in a rule only via `payload.<name>` - never
+        a fixed field name - since an observable type's observation shape is
+        arbitrary; `worker` is the one piece of observation metadata exposed
+        directly, since it's universal across every observable type. A matching
+        rule with a `cooldown_seconds` set is silently skipped (no alert
+        created) if it already fired an alert for this same observable within
+        that many seconds. A rule's `payload`/`payload.<field>` `changed`/
+        `changed_within <duration>` operators (see POST /api/rules) are
+        evaluated against the analyzed observation's `observable_id` and
+        `timestamp`, looking up the prior observation(s) stored for that
+        observable.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [id, price, url, timestamp]
+              required: [id, timestamp, worker_id]
               properties:
-                id: { type: integer, description: item_id }
-                price: { type: number }
-                url: { type: string }
+                id: { type: integer, description: observable_id }
                 timestamp: { type: string }
-                discount: { type: string }
-                available: { type: boolean }
+                worker_id:
+                  type: string
+                  description: The reporting worker's id (workers.worker_id), usable directly in rule definitions.
+                properties:
+                  type: object
+                  additionalProperties: true
+                  description: Validated against the owning observable's observable_type's observation_schema.
       responses:
         "200": { description: Created }
+        "400": { description: properties failed validation against the observable type's observation_schema, or worker_id is missing }
+        "404": { description: observable not found }
 
   /api/observations/{id}:
     delete:
@@ -606,70 +1001,37 @@ paths:
       responses:
         "200": { description: OK }
 
-  /api/events:
-    get:
-      tags: [Events]
-      summary: List events
-      parameters:
-        - { name: id, in: query, schema: { type: integer } }
-        - { name: source, in: query, schema: { type: string } }
-        - { name: item_id, in: query, schema: { type: integer } }
-        - { name: tags, in: query, schema: { type: string } }
-        - { name: search, in: query, schema: { type: string } }
-        - { name: created_after, in: query, schema: { type: string }, description: "Absolute timestamp, or a relative keyword like now-24h." }
-        - { name: created_before, in: query, schema: { type: string } }
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  items: { type: array, items: { $ref: "#/components/schemas/Event" } }
-                  total_items: { type: integer }
-    post:
-      tags: [Events]
-      summary: Create an event - resolves rule matches and creates the linked alert(s)
-      requestBody:
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                source: { type: string }
-                payload: { type: string }
-                tags: { type: array, items: { type: string } }
-                item_id: { type: integer }
-      responses:
-        "202": { description: Event queued }
-
-  /api/events/{id}:
-    get:
-      tags: [Events]
-      summary: Get an event
-      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
-      responses:
-        "200": { description: OK }
-    delete:
-      tags: [Events]
-      summary: Delete an event (cascades to its alert(s))
-      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
-      responses:
-        "200": { description: OK }
-
   /api/alerts:
     get:
       tags: [Alerts]
       summary: List fired alerts
       parameters:
-        - { name: status, in: query, schema: { type: string } }
-        - { name: priority, in: query, schema: { type: string } }
+        - { name: severity, in: query, schema: { type: string } }
         - { name: rule_id, in: query, schema: { type: string }, description: "An id, 'matched', or 'none'." }
+        - { name: observation_id, in: query, schema: { type: integer } }
+        - { name: observable_id, in: query, schema: { type: integer } }
+        - { name: observable_type_id, in: query, schema: { type: integer } }
         - { name: tags, in: query, schema: { type: string } }
         - { name: search, in: query, schema: { type: string } }
         - { name: created_after, in: query, schema: { type: string } }
         - { name: created_before, in: query, schema: { type: string } }
+        - name: needs_delivery
+          in: query
+          schema: { type: boolean }
+          description: >-
+            Plain data filter (no matching): only alerts with no alert_deliveries
+            row yet, or at least one in status='error' - the candidate set the
+            "evaluator" worker role pages through.
+        - name: after_id
+          in: query
+          schema: { type: integer }
+          description: >-
+            Keyset cursor: only alerts with an id greater than this. Combine with
+            `sort=id:asc` to page a set that shrinks while it is being paged
+            (needs_delivery), where offset paging (`from`) would skip rows.
+        - { name: sort, in: query, schema: { type: string }, description: "e.g. created_at:desc" }
+        - { name: from, in: query, schema: { type: integer } }
+        - { name: size, in: query, schema: { type: integer } }
       responses:
         "200":
           description: OK
@@ -680,6 +1042,44 @@ paths:
                 properties:
                   items: { type: array, items: { $ref: "#/components/schemas/Alert" } }
                   total_items: { type: integer }
+    post:
+      tags: [Alerts]
+      summary: Create an alert directly
+      description: >-
+        Requires alerts:create (distinct from alerts:read/update/delete; the
+        built-in admin and operator roles have it, viewer doesn't). A narrow, validating
+        create for a caller that already decided a rule matched and already
+        made its own cooldown decision - it performs no matching/cooldown
+        logic of its own, only checks observation_id references an existing
+        observation and severity (if given) is one of the four allowed
+        values. Used by the standalone worker's analyzer role
+        (shared/watchtower_worker_core/worker_rule_matcher.lua) to create
+        alerts from its own client-side rule matching. The embedded worker
+        creates alerts in-process instead (shared/analyzer.lua); neither path
+        runs as a side effect of POST /api/observations.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [observation_id]
+              properties:
+                observation_id: { type: integer }
+                severity: { type: string, enum: [low, medium, high, critical] }
+                rule_id: { type: integer, nullable: true }
+                tags: { type: array, items: { type: string }, nullable: true }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  item: { $ref: "#/components/schemas/Alert" }
+        "400": { description: severity is not one of the allowed values }
+        "404": { description: observation not found }
 
   /api/alerts/{id}:
     get:
@@ -703,7 +1103,6 @@ paths:
       parameters:
         - { name: id, in: query, schema: { type: integer } }
         - { name: name, in: query, schema: { type: string } }
-        - { name: action, in: query, schema: { type: string } }
         - { name: enabled, in: query, schema: { type: boolean } }
         - { name: search, in: query, schema: { type: string } }
       responses:
@@ -718,7 +1117,29 @@ paths:
                   total_items: { type: integer }
     post:
       tags: [Rules]
-      summary: Create a rule from its flat source document
+      summary: >-
+        Create a rule from its flat source document. `if:` is deliberately agnostic to each
+        observable type's own schema - the only fields it can reference directly are
+        `source`, `observable_id`, `worker`, `observable_type` (the observable type's own `name`, e.g.
+        `observable_type = "product"`) and `payload`; any observable type's own observation fields
+        (e.g. "product"'s price/discount/available/url) are reachable only via `payload.<field>`,
+        since their names/shapes vary per observable type (see ObservableType.observation_schema).
+        Besides `=`/`!=`/`>`/`<`/`>=`/`<=`, `payload`/`payload.<field>` also support: `changed`
+        (true if the value differs from the immediately preceding observation) and `changed_within
+        <duration>` (same, vs. the value at least `<duration>` ago - a magnitude+unit string, e.g.
+        `30s`/`1m`/`2h`/`3d`/`1M`/`500ms`, or bare `0`; there is no dedicated "unchanged" operator -
+        use `NOT (payload.price changed)`); `is_set` (true when the field is present, e.g.
+        `NOT (payload.discount_code is_set)` for "absent"); `contains` (plain, case-insensitive
+        substring search - not a regex, to avoid a ReDoS surface on a hot ingestion path); `in
+        (v1, v2, ...)` (shorthand for repeated `= OR =`, valid wherever `=` is except `tags`, which
+        already has `has`); `dropped_pct <percent> within <duration>` / `raised_pct` (true when a
+        numeric field fell/rose by at least that percent vs. its value at least `<duration>` ago,
+        e.g. `payload.price dropped_pct 10 within 24h`); and `older_than <duration>` / `newer_than`
+        (compares a `date`-typed field, an ISO 8601 string, against `now - <duration>` - an absolute
+        literal comparison like `payload.published_at > "2026-01-01"` already works via `>`/`<`
+        directly, these two only add the "relative to now" case). `severity` (notification-policy
+        `if:` only - rules never see it) ranks `>`/`<`/`>=`/`<=` semantically as
+        low < medium < high < critical, not alphabetically.
       requestBody:
         required: true
         content:
@@ -731,8 +1152,7 @@ paths:
                   type: string
                   example: |
                     name: cheap-gpu
-                    if: price < 300 AND available = true
-                    action: notify-discord
+                    if: payload.price < 300 AND worker = "worker-lua"
                     severity: high
       responses:
         "201": { description: Created }
@@ -765,10 +1185,109 @@ paths:
       responses:
         "200": { description: OK }
 
+  /api/rules/export:
+    get:
+      tags: [Rules]
+      summary: >-
+        Download matching rules (all, or `?ids=1,2,3`) as a file - a single
+        `.yaml` for exactly one matching rule, or a `.zip` of one `.yaml`
+        per rule for 2+. The response body is the raw file, not JSON.
+      parameters:
+        - { name: ids, in: query, schema: { type: string }, description: "Comma-separated rule ids. Omit to export every rule." }
+      responses:
+        "200":
+          description: OK
+          content:
+            text/yaml: { schema: { type: string, format: binary } }
+            application/zip: { schema: { type: string, format: binary } }
+        "404": { description: No rules matched }
+
+  /api/rules/import/preflight:
+    post:
+      tags: [Rules]
+      summary: >-
+        Parses and validates an uploaded rule file or zip of rule files
+        without saving anything. A zip is detected by its magic bytes, not
+        the filename/extension. Each candidate is validated the same way
+        POST/PUT /api/rules validates `source`; a name collision with an
+        existing rule is reported as `conflict` for the caller to resolve
+        before calling POST /api/rules/import.
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties: { file: { type: string, format: binary } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        file: { type: string }
+                        name: { type: string }
+                        source: { type: string }
+                        error: { type: string, description: Set instead of name/source if this candidate failed validation. }
+                        conflict:
+                          type: object
+                          nullable: true
+                          properties: { id: { type: integer }, name: { type: string } }
+        "400": { description: File missing, or the upload isn't a valid zip }
+
+  /api/rules/import:
+    post:
+      tags: [Rules]
+      summary: >-
+        Commits a client-resolved decision array from a prior preflight.
+        Each item is processed independently (one bad item doesn't abort
+        the rest) via the same validation as POST/PUT /api/rules.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    type: object
+                    required: [source, action]
+                    properties:
+                      source: { type: string }
+                      action: { type: string, enum: [create, update] }
+                      existing_id: { type: integer, description: Required when action is "update". }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        ok: { type: boolean }
+                        error: { type: string, nullable: true }
+
   /api/rules/test:
     post:
       tags: [Rules]
-      summary: Match a sample event against every enabled rule (nothing is persisted)
+      summary: >-
+        Match a sample observation against every enabled rule (nothing is persisted).
+        `changed`/`changed_within <duration>`/`dropped_pct`/`raised_pct` only evaluate
+        meaningfully when a real `observable_id` with stored observation history is
+        supplied; otherwise they deterministically evaluate to `false`.
       requestBody:
         content:
           application/json:
@@ -777,12 +1296,9 @@ paths:
               properties:
                 source: { type: string }
                 payload: { type: string }
-                tags: { type: array, items: { type: string } }
-                item_id: { type: integer }
-                price: { type: number }
-                discount: { type: string }
-                available: { type: boolean }
-                url: { type: string }
+                observable_id: { type: integer }
+                worker: { type: string }
+                observable_type: { type: string }
       responses:
         "200":
           description: OK
@@ -797,14 +1313,17 @@ paths:
                       type: object
                       properties:
                         id: { type: integer }
-                        action: { type: string }
                         severity: { type: string, nullable: true }
                         tags: { type: array, items: { type: string }, nullable: true }
 
   /api/rules/test-expression:
     post:
       tags: [Rules]
-      summary: Evaluate an ad-hoc `if:` expression against a sample event (nothing is persisted, no rule needs to exist)
+      summary: >-
+        Evaluate an ad-hoc `if:` expression against a sample observation (nothing is persisted,
+        no rule needs to exist). `changed`/`changed_within <duration>`/`dropped_pct`/
+        `raised_pct` only evaluate meaningfully when a real `observable_id` with stored
+        observation history is supplied; otherwise they deterministically evaluate to `false`.
       requestBody:
         content:
           application/json:
@@ -815,12 +1334,9 @@ paths:
                 if: { type: string }
                 source: { type: string }
                 payload: { type: string }
-                tags: { type: array, items: { type: string } }
-                item_id: { type: integer }
-                price: { type: number }
-                discount: { type: string }
-                available: { type: boolean }
-                url: { type: string }
+                observable_id: { type: integer }
+                worker: { type: string }
+                observable_type: { type: string }
       responses:
         "200":
           description: OK
@@ -831,10 +1347,15 @@ paths:
                 properties: { matched: { type: boolean } }
         "400": { description: Invalid expression }
 
-  /api/monitors:
+  /api/workers:
     get:
-      tags: [Monitors]
-      summary: List registered monitors
+      tags: [Workers]
+      summary: List registered workers
+      parameters:
+        - name: role
+          in: query
+          schema: { type: string, enum: [analyzer, observer, deliver, scheduler, evaluator] }
+          description: Filter to workers that declared this role in their last heartbeat's `roles`.
       responses:
         "200":
           description: OK
@@ -843,41 +1364,59 @@ paths:
               schema:
                 type: object
                 properties:
-                  items: { type: array, items: { $ref: "#/components/schemas/Monitor" } }
+                  items: { type: array, items: { $ref: "#/components/schemas/Worker" } }
 
-  /api/monitors/{id}:
+  /api/workers/{id}:
     get:
-      tags: [Monitors]
-      summary: Get a monitor
+      tags: [Workers]
+      summary: Get a worker
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK }
+        "404": { description: Not found }
+    delete:
+      tags: [Workers]
+      summary: Delete a worker
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       responses:
         "200": { description: OK }
         "404": { description: Not found }
 
-  /api/monitors/{id}/heartbeat:
+  /api/workers/{id}/heartbeat:
     put:
-      tags: [Monitors]
-      summary: Self-register/refresh a monitor's identity and health
+      tags: [Workers]
+      summary: Self-register/refresh a worker's identity, roles, and health
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       requestBody:
         content:
           application/json:
             schema:
               type: object
-              required: [connection_type]
+              required: [connection_type, roles]
               properties:
                 connection_type: { type: string, enum: [http, mqtt, embedded] }
                 version: { type: string }
                 capabilities: { type: array, items: { type: string } }
-                item_filter: { type: string }
                 uptime_seconds: { type: number }
                 config: { type: string }
+                roles:
+                  type: array
+                  items: { type: string, enum: [analyzer, observer, deliver, scheduler, evaluator] }
+                  description: At least one fixed role this worker performs.
+                properties:
+                  type: object
+                  additionalProperties: true
+                  description: >-
+                    Validated against the combined property schema of every role in `roles` (see
+                    the Worker schema) - an unknown key, or a key belonging to a role not
+                    declared in `roles`, is rejected.
       responses:
         "202": { description: Heartbeat recorded }
+        "400": { description: Unknown worker role, or properties failed validation against the declared roles' schemas }
 
-  /api/monitors/{id}/heartbeats:
+  /api/workers/{id}/heartbeats:
     get:
-      tags: [Monitors]
+      tags: [Workers]
       summary: Bucketed heartbeat history, for a connectivity histogram
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -898,15 +1437,291 @@ paths:
                       type: object
                       properties: { bucket: { type: string }, count: { type: integer } }
 
+  /api/workers/embedded/run/{role}:
+    post:
+      tags: [Workers]
+      summary: Trigger a single out-of-band pass of the embedded worker's given role
+      description: >-
+        The embedded worker's closest equivalent to the standalone worker's
+        --once/WORKER_RUN_ONCE (see worker/lua/main.lua and
+        docs/dev/worker-configuration.md's "Running as a one-shot job"
+        section) - it can't itself be invoked by an external OS cron/systemd
+        timer since it lives inside the server's nginx worker process rather
+        than being its own process, but an admin, or an external cron
+        curling this route, can force one immediate pass of a given role's
+        action ahead of that role's own polling cadence. Runs synchronously
+        and returns once dispatched - it doesn't itself report whether the
+        underlying claim found/sent anything, check jobs/alert_deliveries or
+        the server logs for that, same as the role's own periodic tick.
+        404s if the embedded worker isn't running on this server
+        (USE_EMBED_WORKER=0), 400s for an unrecognized role or a role this
+        worker doesn't currently declare (e.g. "deliver" without
+        USE_EMBED_DELIVER=1).
+      parameters:
+        - name: role
+          in: path
+          required: true
+          schema: { type: string, enum: [observer, analyzer, evaluator, deliver, scheduler] }
+      responses:
+        "202": { description: Role triggered }
+        "400": { description: Unknown or undeclared role }
+        "404": { description: Embedded worker is not running on this server }
+
+  /api/scheduler:
+    get:
+      tags: [Scheduler]
+      summary: List scheduler tasks
+      parameters:
+        - { name: type, in: query, schema: { type: string, enum: [observe, analyze, notify, deliver] } }
+        - { name: observable_type_id, in: query, schema: { type: integer } }
+        - { name: schedule_type, in: query, schema: { type: string, enum: [cron, one_shot] } }
+        - { name: enabled, in: query, schema: { type: string, enum: [true, false] } }
+        - { name: search, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/SchedulerTask" } }
+                  total_items: { type: integer }
+    post:
+      tags: [Scheduler]
+      summary: Create a scheduler task
+      description: >-
+        `next_run_at` is computed server-side from the schedule fields.
+        `type` defaults to `observe` and is immutable after creation. For
+        `observe`/`analyze`, `observable_type_id` is required and `observable_ids`
+        omitted/empty means every enabled observable of `observable_type_id`
+        (resolved fresh at each firing). For `notify`, `observable_type_id`/
+        `observable_ids` are rejected and `notify_policy_ids` omitted/empty means
+        every enabled notification policy. `deliver` accepts neither
+        `observable_type_id`/`observable_ids` nor `notify_policy_ids` - it has
+        no target of its own, it just drains whatever's pending on the
+        alert_deliveries queue (see that worker role's deliver.source
+        config). `run_at` omitted on a one_shot task means "run as soon as
+        possible" (server defaults it to NOW()). `run_now: true` forces
+        `next_run_at` to NOW() regardless of schedule_type, without altering
+        `cron_expression`/`run_at` - a cron task fires once immediately and
+        then resumes its normal cadence. `run_now` is not persisted and
+        never appears in the response.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, schedule_type]
+              properties:
+                name: { type: string }
+                type: { type: string, enum: [observe, analyze, notify, deliver], default: observe }
+                observable_type_id: { type: integer, description: "Required for observe/analyze." }
+                observable_ids: { type: array, items: { type: integer } }
+                notify_policy_ids: { type: array, items: { type: integer } }
+                schedule_type: { type: string, enum: [cron, one_shot] }
+                cron_expression: { type: string }
+                run_at: { type: string }
+                enabled: { type: boolean }
+                run_now: { type: boolean }
+      responses:
+        "201": { description: Created }
+        "400": { description: Invalid cron expression, observable_ids not belonging to observable_type_id, unknown notify_policy_ids, etc. }
+
+  /api/scheduler/{id}:
+    get:
+      tags: [Scheduler]
+      summary: Get a scheduler task
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK }
+        "404": { description: Not found }
+    put:
+      tags: [Scheduler]
+      summary: Update a scheduler task
+      description: >-
+        `type`/`observable_type_id` are immutable after creation - not
+        accepted here even if present in the body. `run_now: true` forces
+        `next_run_at` to NOW() regardless of schedule_type, without altering
+        `cron_expression`/`run_at` - a cron task fires once immediately and
+        then resumes its normal cadence. `run_now` is not persisted and
+        never appears in the response.
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                observable_ids: { type: array, items: { type: integer } }
+                notify_policy_ids: { type: array, items: { type: integer } }
+                schedule_type: { type: string, enum: [cron, one_shot] }
+                cron_expression: { type: string }
+                run_at: { type: string }
+                enabled: { type: boolean }
+                run_now: { type: boolean }
+      responses:
+        "200": { description: OK }
+        "400": { description: Invalid input }
+    delete:
+      tags: [Scheduler]
+      summary: Delete a scheduler task
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: Deleted }
+
+  /api/scheduler/preview-cron:
+    post:
+      tags: [Scheduler]
+      summary: Evaluate a draft cron expression without saving anything
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cron_expression]
+              properties:
+                cron_expression: { type: string }
+                count: { type: integer, description: "Up to 20, default 5." }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  next_runs: { type: array, items: { type: string } }
+        "400": { description: Invalid cron expression }
+
+  /api/scheduler/fire-due:
+    put:
+      tags: [Scheduler]
+      summary: Worker-facing "scheduler" role tick
+      description: >-
+        Evaluates every due scheduler_tasks row (enabled, next_run_at <=
+        NOW()) and queues a single pending `jobs` row per firing (type=the
+        task's own type, ref_id=the scheduler_tasks id, from_scheduler=true
+        - reusing an existing unclaimed one for the same task if present),
+        then advances next_run_at (cron) or disables (one_shot). Does not
+        resolve or depend on the task's target (observable set, or notify
+        dispatch plan) - that's resolved lazily by whichever worker claims
+        the job (see PUT /api/scheduler/claim). Called by a standalone
+        worker's own scheduler tick; the embedded worker calls the
+        underlying service directly instead.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  fired: { type: integer }
+
+  /api/scheduler/claim:
+    put:
+      tags: [Scheduler]
+      summary: Worker-facing role priority pickup (observe/analyze/notify/deliver)
+      description: >-
+        Atomically claims the single oldest pending `jobs` row of `type`
+        queued by a scheduler task firing (if any), ahead of the normal
+        stalest-observable polling (for type=observe). Same lax, no-locking model
+        already used for observe/test jobs. The claimed job's target is
+        resolved fresh at claim time - `observables` for observe/analyze (so
+        the worker can process the whole batch without a
+        GET /api/observables/:id round trip per observable, returned in
+        full); for notify, only the task's policy scope
+        (`notify_policy_ids`, absent = every enabled policy) - claiming
+        evaluates nothing, since an API route never evaluates: the
+        "evaluator" worker role matches unnotified
+        alerts against notification_policies and enqueues the result onto the
+        alert_deliveries queue itself, in its own process (it never sends
+        anything - see PUT /api/alert_deliveries/claim for that role); for deliver,
+        claiming forwards straight to PUT /api/alert_deliveries/claim's own
+        claim_batch internally and returns its `groups` unchanged - an
+        alternative entry point onto that queue for the "deliver" role
+        (its own deliver.source config picks between claiming here or
+        calling PUT /api/alert_deliveries/claim directly, see that route).
+        The claiming worker must report exactly one final status back on
+        this same job (PUT /api/jobs/<type>/:task_id/ack or .../error, with
+        skip_rollup=true - see the Job schema's ref_id note) once the whole
+        target has been attempted (for notify, after its own matching pass),
+        rather than a job per
+        observable/channel - for deliver, in addition to that job report,
+        the worker also reports each individual delivery's own outcome via
+        PUT /api/alert_deliveries/report, exactly as it would for a direct
+        alert_deliveries claim.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [worker_id, type]
+              properties:
+                worker_id: { type: string }
+                type: { type: string, enum: [observe, analyze, notify, deliver] }
+      responses:
+        "200":
+          description: OK (an empty/null item means nothing is pending)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  item:
+                    type: object
+                    nullable: true
+                    properties:
+                      job_id: { type: integer }
+                      task_id: { type: integer, description: the scheduler_tasks id this job belongs to }
+                      type: { type: string, enum: [observe, analyze, notify, deliver] }
+                      observables:
+                        type: array
+                        items: { $ref: "#/components/schemas/Observable" }
+                        description: observe/analyze only.
+                      notify_policy_ids:
+                        type: array
+                        items: { type: integer }
+                        description: >-
+                          notify only - the task's policy scope; omitted when
+                          the task targets every enabled policy.
+                      groups:
+                        type: array
+                        description: >-
+                          deliver only - a batch of pending alert_deliveries
+                          rows grouped by channel, same shape
+                          PUT /api/alert_deliveries/claim's own `item.groups`
+                          returns.
+                        items:
+                          type: object
+                          properties:
+                            channel:
+                              type: object
+                              description: "A notification_channels row, e.g. {id, type, name, options}."
+                            alerts: { type: array, items: { $ref: "#/components/schemas/Alert" } }
+                            alert_ids: { type: array, items: { type: integer } }
+
   /api/jobs:
     get:
       tags: [Jobs]
       summary: List jobs
       parameters:
-        - { name: monitor_id, in: query, schema: { type: string } }
-        - { name: type, in: query, schema: { type: string, enum: [scrape, notify] } }
+        - { name: worker_id, in: query, schema: { type: string } }
+        - { name: type, in: query, schema: { type: string, enum: [observe, analyze, notify, deliver, observer_test] } }
         - { name: status, in: query, schema: { type: string } }
         - { name: ref_id, in: query, schema: { type: integer } }
+        - name: observable_type_id
+          in: query
+          schema: { type: integer }
+          description: >-
+            Resolves the polymorphic ref_id through scheduler_tasks
+            (from_scheduler=true rows) or observables (from_scheduler=false rows)
+            depending on each row's own from_scheduler flag.
         - { name: search, in: query, schema: { type: string } }
       responses:
         "200":
@@ -922,8 +1737,8 @@ paths:
   /api/jobs/stats:
     get:
       tags: [Jobs]
-      summary: Per-monitor job totals + a breakdown by status
-      parameters: [{ name: type, in: query, schema: { type: string, enum: [scrape, notify] } }]
+      summary: Per-worker job totals + a breakdown by status
+      parameters: [{ name: type, in: query, schema: { type: string, enum: [observe, analyze, notify, deliver, observer_test] } }]
       responses:
         "200": { description: OK }
 
@@ -934,11 +1749,17 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
       responses:
         "200": { description: OK }
+    delete:
+      tags: [Jobs]
+      summary: Delete a job
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK }
 
   /api/jobs/for/{type}/{ref_id}:
     get:
       tags: [Jobs]
-      summary: List every job reported for one (type, ref) pair, across all monitors
+      summary: List every job reported for one (type, ref) pair, across all workers
       parameters:
         - { name: type, in: path, required: true, schema: { type: string } }
         - { name: ref_id, in: path, required: true, schema: { type: integer } }
@@ -948,12 +1769,18 @@ paths:
   /api/jobs/{type}/{ref_id}/{status}:
     put:
       tags: [Jobs]
-      summary: Monitor-facing status report (lazily creates the job on its first report)
+      summary: Worker-facing status report (lazily creates the job on its first report)
       description: >-
         `status` is `triggering` or `ack`, mapped server-side to the DB's
         `triggering`/`acknowledged` values. Upserted by
-        (monitor_id, type, ref_id) - see CLAUDE.md's Jobs section for the
-        retry/rollup semantics.
+        (worker_id, type, ref_id) - see CLAUDE.md's Jobs section for the
+        retry/rollup semantics. For type='observer_test', ref_id is an
+        observer_config_test_requests id (see
+        /api/observer_configs/test_requests/pending) and `result`
+        carries the observed {ok, data} back on ack. A scheduler task's
+        single aggregate job (see PUT /api/scheduler/claim) also reports
+        here with type='observe' and ref_id=the scheduler_tasks id, always
+        with skip_rollup=true.
       parameters:
         - { name: type, in: path, required: true, schema: { type: string } }
         - { name: ref_id, in: path, required: true, schema: { type: integer } }
@@ -963,18 +1790,28 @@ paths:
           application/json:
             schema:
               type: object
-              required: [monitor_id]
+              required: [worker_id]
               properties:
-                monitor_id: { type: string }
+                worker_id: { type: string }
                 action: { type: string }
                 message: { type: string }
+                result: { type: object }
+                skip_rollup:
+                  type: boolean
+                  description: >-
+                    Skips writing this report onto its type's rollup target
+                    (e.g. observables.last_observe_* for type='observe') - required
+                    when ref_id doesn't actually identify that target, as is
+                    the case for a scheduler task's aggregate job (ref_id is
+                    a scheduler_tasks id there, not an observables id). Every
+                    ordinary per-observable report omits this.
       responses:
         "202": { description: Status changed }
 
   /api/jobs/{type}/{ref_id}/error:
     put:
       tags: [Jobs]
-      summary: Monitor-facing error report
+      summary: Worker-facing error report
       parameters:
         - { name: type, in: path, required: true, schema: { type: string } }
         - { name: ref_id, in: path, required: true, schema: { type: integer } }
@@ -983,10 +1820,11 @@ paths:
           application/json:
             schema:
               type: object
-              required: [monitor_id]
+              required: [worker_id]
               properties:
-                monitor_id: { type: string }
+                worker_id: { type: string }
                 message: { type: string }
+                skip_rollup: { type: boolean, description: "See the sibling :status route's skip_rollup." }
       responses:
         "202": { description: Error recorded }
 
@@ -1032,84 +1870,245 @@ paths:
       responses:
         "200": { description: OK }
 
-  /api/scrapers/remote_config_lua/site:
+  /api/notification_policies:
     get:
-      tags: [Scrapers]
-      summary: List scraper site definitions
+      tags: [NotificationPolicies]
+      summary: List notification policies
+      parameters:
+        - { name: name, in: query, schema: { type: string } }
+        - { name: enabled, in: query, schema: { type: string, enum: [true, false] } }
+        - { name: search, in: query, schema: { type: string } }
       responses:
-        "200": { description: OK }
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/NotificationPolicy" } }
+                  total_items: { type: integer }
     post:
-      tags: [Scrapers]
-      summary: Create a scraper site definition
+      tags: [NotificationPolicies]
+      summary: Create a notification policy
+      description: >-
+        Authored the same flat key:value `source` document a Rule is (see
+        CLAUDE.md's Rules section) - `name`/`if`/`channels` required,
+        `description`/`tags`/`enabled` optional. `channels` is a
+        comma-separated list of notification_channels ids, every one of
+        which must already exist.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source]
+              properties:
+                source: { type: string }
       responses:
         "201": { description: Created }
+        "400": { description: Invalid source, unknown field, invalid 'if' expression, or unknown channel id }
 
-  /api/scrapers/remote_config_lua/site/{id}:
-    put:
-      tags: [Scrapers]
-      summary: Update a scraper site definition
-      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
-      responses:
-        "200": { description: OK }
-    delete:
-      tags: [Scrapers]
-      summary: Delete a scraper site definition
-      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
-      responses:
-        "200": { description: OK }
-
-  /api/scrapers/remote_config_lua/site/{id}/test:
-    post:
-      tags: [Scrapers]
-      summary: Test a saved site definition against a URL
-      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
-      requestBody:
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [test_url]
-              properties: { test_url: { type: string } }
-      responses:
-        "200": { description: OK }
-
-  /api/scrapers/remote_config_lua/test:
-    post:
-      tags: [Scrapers]
-      summary: Test an ad-hoc (unsaved) site definition against a URL
-      responses:
-        "200": { description: OK }
-
-  /api/scrapers/remote_config_lua/test/_all:
-    post:
-      tags: [Scrapers]
-      summary: Test every saved site definition against a URL
-      requestBody:
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [test_url]
-              properties: { test_url: { type: string } }
-      responses:
-        "200": { description: OK }
-
-  /api/scrapers/remote_config_lua/export:
+  /api/notification_policies/{id}:
     get:
-      tags: [Scrapers]
-      summary: Export all site definitions as a JSON file
+      tags: [NotificationPolicies]
+      summary: Get a notification policy
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK }
+        "404": { description: Not found }
+    put:
+      tags: [NotificationPolicies]
+      summary: Update a notification policy
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source]
+              properties:
+                source: { type: string }
+      responses:
+        "200": { description: OK }
+        "400": { description: Invalid input }
+    delete:
+      tags: [NotificationPolicies]
+      summary: Delete a notification policy
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
       responses:
         "200": { description: OK }
 
-  /api/scrapers/remote_config_lua/import:
+  /api/notification_policies/test:
     post:
-      tags: [Scrapers]
-      summary: Import site definitions from a previously exported JSON file
+      tags: [NotificationPolicies]
+      summary: Evaluate a draft `if:` expression against a sample alert-like payload, without saving anything
       requestBody:
+        required: true
         content:
-          multipart/form-data:
+          application/json:
             schema:
               type: object
-              properties: { file: { type: string, format: binary } }
+              required: ["if"]
+              properties:
+                if: { type: string }
+                severity: { type: string, enum: [low, medium, high, critical] }
+                tags: { type: array, items: { type: string } }
+                rule_id: { type: integer }
+                observable_id: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  matched: { type: boolean }
+        "400": { description: Invalid expression }
+
+  /api/alert_deliveries:
+    get:
+      tags: [NotificationChannels]
+      summary: List notification deliveries (the durable delivery queue)
+      description: >-
+        Flat, filterable/sortable/paginated view over the per-(alert,
+        channel) delivery queue the notify pipeline produces (see
+        CLAUDE.md's plugins/scheduler/ and plugins/notification_channels/
+        sections) - the same rows also surfaced nested per-alert as
+        Alert.deliveries.
+      parameters:
+        - { name: channel_id, in: query, schema: { type: integer } }
+        - { name: status, in: query, schema: { type: string, enum: [pending, triggering, sent, error] } }
+        - { name: search, in: query, schema: { type: string }, description: Matches the channel's name or worker_id. }
+        - { name: notified_after, in: query, schema: { type: string } }
+        - { name: notified_before, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/AlertDelivery" } }
+                  total_items: { type: integer }
+
+  /api/alert_deliveries/claim:
+    put:
+      tags: [NotificationChannels]
+      summary: Worker-facing "deliver" role priority pickup
+      description: >-
+        Atomically claims up to `limit` 'pending' alert_deliveries rows
+        (oldest first), advancing them to 'triggering' and resolving each
+        claimed (alert, channel) pair's full alert/channel data, grouped by
+        channel - fully independent of scheduler_tasks/jobs, unlike
+        PUT /api/scheduler/claim. Uses FOR UPDATE SKIP LOCKED, so more than
+        one "deliver" worker can safely drain this queue concurrently
+        without claiming the same row twice. The claiming worker must
+        report every claimed row's own outcome back via
+        PUT /api/alert_deliveries/report. A "deliver" worker's own
+        deliver.source config picks whether it calls this route directly
+        (the default) or instead claims a scheduler_tasks type='deliver' job
+        via PUT /api/scheduler/claim, whose 'deliver' branch calls this same
+        claim internally - see that route's own description.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [worker_id]
+              properties:
+                worker_id: { type: string }
+                limit: { type: integer, description: "Default 200." }
+      responses:
+        "200":
+          description: OK (an empty/null item means nothing is pending)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  item:
+                    type: object
+                    nullable: true
+                    properties:
+                      groups:
+                        type: array
+                        description: One entry per channel a claimed row routes to.
+                        items:
+                          type: object
+                          properties:
+                            channel:
+                              type: object
+                              description: "A notification_channels row, e.g. {id, type, name, options}."
+                            alerts: { type: array, items: { $ref: "#/components/schemas/Alert" } }
+                            alert_ids: { type: array, items: { type: integer } }
+
+  /api/alert_deliveries/report:
+    put:
+      tags: [NotificationChannels]
+      summary: Worker-facing "deliver" role outcome report
+      description: >-
+        Applies each entry in `channel_results` directly onto its own
+        (alert_id, channel_id) alert_deliveries row - status becomes 'sent'
+        (with notified_at set) or 'error' (with error_message set) -
+        guarded on that row still being 'triggering' and claimed by this
+        same worker_id, so a report can only resolve a row this worker
+        actually claimed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [worker_id, channel_results]
+              properties:
+                worker_id: { type: string }
+                channel_results:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      channel_id: { type: integer }
+                      alert_id: { type: integer }
+                      ok: { type: boolean }
+                      reason: { type: string, nullable: true }
       responses:
         "200": { description: OK }
+
+  /api/alert_deliveries/reap-stale:
+    put:
+      tags: [NotificationChannels]
+      summary: Worker-facing "evaluator" role stale-delivery housekeeping
+      description: >-
+        Resets any alert_deliveries row stuck in 'triggering' past
+        timeout_seconds back to 'error' (with error_message set) - a claim
+        (PUT /api/alert_deliveries/claim) whose "deliver"-role worker
+        crashed/hung/lost connectivity before reporting would otherwise sit
+        in 'triggering' forever, never sent and never retried. The
+        "evaluator" role runs this (not "deliver") for the same reason
+        "scheduler" - not "observer"/"analyzer" - reaps stale jobs (see
+        PUT /api/jobs/reap-stale): it's the role that produces this queue's
+        rows in the first place.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                timeout_seconds: { type: integer, nullable: true, description: "Default 300." }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reaped: { type: integer }
+                  items: { type: array, items: { $ref: "#/components/schemas/AlertDelivery" } }
+

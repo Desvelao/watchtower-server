@@ -6,14 +6,20 @@
 -- body loaded that way hits OpenResty's "attempt to yield across C-call
 -- boundary" - the actual work below is deferred into an
 -- ngx.timer.at(0, ...) callback (a real coroutine context that supports
--- yielding), the same technique server/workers/scrape_pending_worker.lua
+-- yielding), the same technique server/workers/observe_pending_worker.lua
 -- uses for its own startup DB calls.
+-- Mirrors server/workers/observe_pending_worker.lua's own worker_logger
+-- shape (info/warn/error, printf-free), but is not that same object - this
+-- module runs from its own init_worker_by_lua_block entry (see this file's
+-- own header comment), with no access to that other module's local.
+local logger = {
+  warn = function(message) ngx.log(ngx.WARN, "[bootstrap-admin] " .. message) end,
+  error = function(message) ngx.log(ngx.ERR, "[bootstrap-admin] " .. message) end,
+}
+
 local ok_config, config_err = pcall(require, "config")
 if not ok_config then
-  ngx.log(
-    ngx.ERR,
-    "[bootstrap-admin] failed to load config: " .. tostring(config_err)
-  )
+  logger.error("failed to load config: " .. tostring(config_err))
 end
 
 local function run()
@@ -21,10 +27,7 @@ local function run()
   local initial_admin_password = os.getenv("INITIAL_ADMIN_PASSWORD")
 
   if not (initial_admin_username and initial_admin_password) then
-    ngx.log(
-      ngx.WARN,
-      "[bootstrap-admin] INITIAL_ADMIN_USERNAME/INITIAL_ADMIN_PASSWORD not set - skipping initial admin bootstrap"
-    )
+    logger.warn("INITIAL_ADMIN_USERNAME/INITIAL_ADMIN_PASSWORD not set - skipping initial admin bootstrap")
     return
   end
 
@@ -32,7 +35,7 @@ local function run()
     local db = require("lapis.db")
     local admin_role = require("models.roles"):find({ name = "admin" })
     if not admin_role then
-      ngx.log(ngx.ERR, "[bootstrap-admin] cannot bootstrap: 'admin' role not found")
+      logger.error("cannot bootstrap: 'admin' role not found")
       return
     end
 
@@ -50,7 +53,7 @@ local function run()
   end)
 
   if not ok then
-    ngx.log(ngx.ERR, "[bootstrap-admin] failed: " .. tostring(err))
+    logger.error("failed: " .. tostring(err))
   end
 end
 
@@ -58,7 +61,7 @@ if ngx and ngx.worker and ngx.worker.id then
   if ngx.worker.id() == 0 then
     local ok, err = ngx.timer.at(0, run)
     if not ok then
-      ngx.log(ngx.ERR, "[bootstrap-admin] failed to schedule: " .. tostring(err))
+      logger.error("failed to schedule: " .. tostring(err))
     end
   end
 end

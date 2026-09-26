@@ -74,8 +74,14 @@ function toggleOpen() {
 // as separate state, so the label stays correct even when from/to arrive
 // from a deep-linked URL, not just a click in this popover.
 const activePreset = computed(() => {
+  if (!props.from && !props.to) {
+    return props.presets.find((preset) => preset.hours === undefined) || null;
+  }
   if (props.to || !props.from) return null;
-  return props.presets.find((preset) => props.from === relativeDateKeyword(preset.hours)) || null;
+  return (
+    props.presets.find((preset) => preset.hours !== undefined && props.from === relativeDateKeyword(preset.hours)) ||
+    null
+  );
 });
 
 function formatLocal(value) {
@@ -96,7 +102,8 @@ const triggerLabel = computed(() => {
 });
 
 function selectPreset(preset) {
-  emit("change", { from: relativeDateKeyword(preset.hours), to: "" });
+  const from = preset.hours === undefined ? "" : relativeDateKeyword(preset.hours);
+  emit("change", { from, to: "" });
   open.value = false;
 }
 

@@ -1,55 +1,51 @@
 <script setup>
-import { computed, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAlertsStore } from '../../../stores/alerts';
+import { useObservableTypesStore } from '../../../stores/observableTypes';
 import { useAuthStore } from '../../../stores/auth';
 import DataTable from '../../../components/common/DataTable.vue';
-import AlertStatusBadge from '../../../components/AlertStatusBadge.vue';
-import AlertPriorityBadge from '../../../components/AlertPriorityBadge.vue';
+import AlertSeverityBadge from '../../../components/AlertSeverityBadge.vue';
 import ConfirmDialog from '../../../components/common/ConfirmDialog.vue';
 import AlertDetailsFlyout from '../../../components/AlertDetailsFlyout.vue';
 import IconEye from '../../../components/common/icons/IconEye.vue';
 import IconDelete from '../../../components/common/icons/IconDelete.vue';
+import IconDownload from '../../../components/common/icons/IconDownload.vue';
+import { exportAlertsFile } from '../../../services/api/alerts';
 import { formatDate } from '../../../utils/date';
+import { observableTypeLabel } from '../../../utils/observableType';
 import { useFilterRouteSync } from '../../../composables/useFilterRouteSync';
 import { PERMISSIONS } from '../../../constants/permissions';
 
 const store = useAlertsStore();
+const observableTypesStore = useObservableTypesStore();
 const auth = useAuthStore();
 const route = useRoute();
 const router = useRouter();
 
+onMounted(() => {
+  if (!observableTypesStore.items.length) observableTypesStore.fetchList();
+});
+
 const pendingAction = ref(null); // { type: 'delete', alert } | { type: 'bulk-delete', ids }
 const bulkError = ref('');
+const exportFormat = ref('json');
 
 const columns = [
   { key: 'id', label: 'ID', sortable: true },
-  { key: 'status', label: 'Status', sortable: true },
-  { key: 'priority', label: 'Priority', sortable: true, sortField: 'priority_value' },
+  { key: 'severity', label: 'Severity', sortable: true, sortField: 'severity_value' },
   { key: 'source', label: 'Source', sortable: true },
-  { key: 'pattern', label: 'Action' },
+  { key: 'type', label: 'Type' },
+  { key: 'rule_name', label: 'Matched rule' },
   { key: 'tags', label: 'Tags' },
   { key: 'created_at', label: 'Created', sortable: true, class: 'whitespace-nowrap text-slate-500 dark:text-slate-400' },
-  { key: 'event_id', label: 'Event' },
+  { key: 'observation_id', label: 'Observation' },
 ];
 
-const otherFields = [
+const otherFields = computed(() => [
   {
-    key: 'status',
-    label: 'Status',
-    type: 'select',
-    options: [
-      { value: '', label: 'Any' },
-      { value: 'pending', label: 'Pending' },
-      { value: 'triggering', label: 'Triggering' },
-      { value: 'acknowledged', label: 'Acknowledged' },
-      { value: 'error', label: 'Error' },
-      { value: 'inactive', label: 'Inactive' },
-    ],
-  },
-  {
-    key: 'priority',
-    label: 'Priority',
+    key: 'severity',
+    label: 'Severity',
     type: 'select',
     options: [
       { value: '', label: 'Any' },
@@ -60,6 +56,12 @@ const otherFields = [
     ],
   },
   { key: 'source', label: 'Source', type: 'text' },
+  {
+    key: 'observable_type_id',
+    label: 'Observable type',
+    type: 'select',
+    options: [{ value: '', label: 'All types' }, ...observableTypesStore.items.map((t) => ({ value: String(t.id), label: t.label || t.name }))],
+  },
   { key: 'tags', label: 'Tag', type: 'text', placeholder: 'single tag', title: 'Matches a single tag exactly' },
   {
     key: 'rule_id',
@@ -71,7 +73,7 @@ const otherFields = [
       { value: 'none', label: 'No rule assigned' },
     ],
   },
-];
+]);
 
 const searchField = { key: 'search', label: 'Search' };
 const dateRangeField = { fromKey: 'created_after', toKey: 'created_before', label: 'Created' };
@@ -90,8 +92,8 @@ function closeDetails() {
   router.push({ query });
 }
 
-function viewEvent(alert) {
-  router.push({ path: '/events', query: { id: alert.event_id } });
+function viewObservation(alert) {
+  router.push({ path: '/observations', query: { id: alert.observation_id } });
 }
 
 function askDelete(alert) {
@@ -116,6 +118,10 @@ async function confirmPendingAction() {
       bulkError.value = `${total - failed} of ${total} deletions succeeded.`;
     }
   }
+}
+
+async function onExport() {
+  await exportAlertsFile(store.buildExportQuery({ format: exportFormat.value }));
 }
 </script>
 
@@ -142,10 +148,28 @@ async function confirmPendingAction() {
       @update:from="store.setPage"
       @update:size="store.setPageSize"
     >
+      <template #header-actions>
+        <select
+          v-model="exportFormat"
+          class="rounded border border-slate-300 px-2 py-1.5 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300"
+        >
+          <option value="json">JSON</option>
+          <option value="csv">CSV</option>
+        </select>
+        <button
+          v-if="auth.can(PERMISSIONS.ALERTS_READ)"
+          type="button"
+          class="flex items-center gap-1.5 rounded border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
+          @click="onExport"
+        >
+          <IconDownload class="h-4 w-4" />
+          Export
+        </button>
+      </template>
+
       <template #description>
         <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">
-          Alerts fired by rule matches against ingested events, tracked through pending, triggering,
-          and acknowledged states.
+          Alerts fired by rule matches against ingested observations.
         </p>
       </template>
 
@@ -164,25 +188,23 @@ async function confirmPendingAction() {
         </button>
       </template>
 
-      <template #cell-status="{ item: alert }">
-        <AlertStatusBadge :status="alert.status" />
+      <template #cell-severity="{ item: alert }">
+        <AlertSeverityBadge :severity="alert.severity" />
       </template>
 
-      <template #cell-priority="{ item: alert }">
-        <AlertPriorityBadge :priority="alert.priority" />
+      <template #cell-type="{ item: alert }">
+        {{ observableTypeLabel(alert.observable_type_id, observableTypesStore.items) }}
       </template>
 
-      <template #cell-pattern="{ item: alert }">
-        <span :class="alert.pattern ? '' : 'italic text-slate-400 dark:text-slate-500'">
-          {{ alert.pattern || 'No rule matched' }}
-        </span>
+      <template #cell-rule_name="{ item: alert }">
         <RouterLink
           v-if="alert.rule_id && auth.can(PERMISSIONS.RULES_READ)"
           :to="`/rules/${alert.rule_id}/edit`"
-          class="block text-xs text-slate-500 underline hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+          class="underline hover:text-slate-700 dark:hover:text-slate-200"
         >
           {{ alert.rule_name }}
         </RouterLink>
+        <span v-else class="italic text-slate-400 dark:text-slate-500">No rule matched</span>
       </template>
 
       <template #cell-tags="{ item: alert, filterBy }">
@@ -200,15 +222,15 @@ async function confirmPendingAction() {
 
       <template #cell-created_at="{ item: alert }">{{ formatDate(alert.created_at) }}</template>
 
-      <template #cell-event_id="{ item: alert }">
+      <template #cell-observation_id="{ item: alert }">
         <button
-          v-if="alert.event_id && auth.can(PERMISSIONS.EVENTS_READ)"
+          v-if="alert.observation_id && auth.can(PERMISSIONS.OBSERVATIONS_READ)"
           type="button"
-          title="View triggering event"
+          title="View triggering observation"
           class="rounded px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-100"
-          @click="viewEvent(alert)"
+          @click="viewObservation(alert)"
         >
-          Event #{{ alert.event_id }}
+          Observation #{{ alert.observation_id }}
         </button>
         <span v-else class="text-xs text-slate-400 dark:text-slate-500">—</span>
       </template>

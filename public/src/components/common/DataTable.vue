@@ -1,9 +1,18 @@
 <script setup>
 import { computed, ref, useSlots, watchEffect } from "vue";
+import { useAutoRefresh } from "../../composables/useAutoRefresh";
 import { useSelection } from "../../composables/useSelection";
 import PaginationControls from "./PaginationControls.vue";
 import TableFilterBar from "./TableFilterBar.vue";
 import IconRefresh from "./icons/IconRefresh.vue";
+
+const REFRESH_INTERVAL_OPTIONS = [
+  { value: 0, label: "Off" },
+  { value: 10_000, label: "10s" },
+  { value: 30_000, label: "30s" },
+  { value: 60_000, label: "1m" },
+  { value: 300_000, label: "5m" },
+];
 
 const props = defineProps({
   title: { type: String, default: "" },
@@ -103,6 +112,12 @@ function filterBy(key, value) {
   if (!key) return;
   emit("update:filters", { [key]: value == null ? "" : String(value) });
 }
+
+/* Auto-refresh */
+
+const { intervalMs } = useAutoRefresh(() => emit("refresh"), computed(() => props.loading), {
+  storageKey: "watchtower_auto_refresh_interval",
+});
 </script>
 
 <template>
@@ -112,6 +127,13 @@ function filterBy(key, value) {
         <h1 class="text-xl font-semibold text-slate-900 dark:text-slate-100">{{ title }}</h1>
       </slot>
       <div class="flex items-center gap-2">
+        <select
+          v-model.number="intervalMs"
+          aria-label="Auto-refresh interval"
+          class="rounded border border-slate-300 px-2 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
+        >
+          <option v-for="opt in REFRESH_INTERVAL_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+        </select>
         <button
           type="button"
           :disabled="loading"

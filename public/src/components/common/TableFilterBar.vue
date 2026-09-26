@@ -20,7 +20,7 @@ const emit = defineEmits(["update:filters"]);
 // Tailwind's JIT scanner only picks up class names it finds literally in
 // source, so the top row's column count can't be built by string
 // interpolation - it's looked up from a fixed table of literal classes
-// instead (same convention as AlertPriorityBadge's tone->class map).
+// instead (same convention as AlertSeverityBadge's tone->class map).
 const GRID_COLS = {
   0: "",
   1: "sm:grid-cols-1 lg:grid-cols-1",

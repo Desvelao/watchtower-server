@@ -1,0 +1,23 @@
+# Example crontab line running the standalone watchtower-server worker as a
+# one-shot job, as an alternative to the systemd unit/timer pair
+# (watchtower-worker.service.example / .timer.example) in this same
+# directory. See docs/dev/worker-configuration.md's "Running as a one-shot
+# job (cron / systemd)" section for what a --once pass does and its exit
+# code contract - a non-zero exit here just fails the cron job the way any
+# other cron command failure would (visible via `run-parts`/MAILTO/your
+# monitoring of choice, depending on setup).
+#
+# Install with `crontab -e` (uncomment and adjust the line below) or drop
+# an adjusted copy into /etc/cron.d/watchtower-worker.
+#
+# ADJUST: image name/tag (see watchtower-worker.service.example's header
+# comment - built from docker/images/prod/worker/Dockerfile, or pulled from
+# ghcr.io/<repo>-worker once published by .github/workflows/docker-publish.yml),
+# the worker_config/secrets bind mounts, and the Docker network name if the
+# server/db run under Docker Compose (`docker network ls` to find it - e.g.
+# `dev_default` if run as `cd dev && docker compose up`, per CLAUDE.md).
+#
+# Runs once a minute - same reasoning as the .timer example's OnCalendar
+# comment (a scheduler task's own cron_expression, not this line, decides
+# what's actually due).
+* * * * * docker run --rm --network dev_default -v /opt/watchtower/worker_config:/etc/watchtower:ro -v /opt/watchtower/secrets/server_api_key:/run/secrets/server_api_key:ro -v /opt/watchtower/worker_plugins:/worker_plugins:ro -e WORKER_CONFIG_FILE=/etc/watchtower/worker_config.lua -e SERVER_API_KEY_FILE=/run/secrets/server_api_key -e LUA_PATH="/shared/?.lua;/shared/?/init.lua;/worker_plugins/?.lua;/worker_plugins/?/init.lua;;" watchtower-worker:latest lua /app/main.lua --once >> /var/log/watchtower-worker.log 2>&1

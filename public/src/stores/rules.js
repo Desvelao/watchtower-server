@@ -4,9 +4,10 @@ import * as rulesApi from '../services/api/rules';
 export const useRulesStore = createListStore('rules', {
   filters: {
     name: '',
-    action: '',
     enabled: '',
     search: '',
+    created_after: '',
+    created_before: '',
   },
   sort: 'id:asc',
   listFn: rulesApi.listRules,

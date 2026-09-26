@@ -11,13 +11,23 @@ import IconRevoke from "../../../components/common/icons/IconRevoke.vue";
 import IconDelete from "../../../components/common/icons/IconDelete.vue";
 import IconEdit from "../../../components/common/icons/IconEdit.vue";
 import { PERMISSIONS } from "../../../constants/permissions";
+import { WORKER_ROLE_PERMISSIONS } from "../../../constants/workerRolePermissions";
+import { WORKER_ROLES } from "../../workers/workerRoleSchemas";
 
 const auth = useAuthStore();
 
-// A dispatcher only polls GET /api/alerts and reports status via
-// PUT /api/alerts/:id/{triggering,ack,error} - see provider_http.lua and
-// AlertClient.cpp. Nothing else is ever called.
-const DISPATCHER_PERMISSIONS = [PERMISSIONS.ALERTS_READ, PERMISSIONS.ALERTS_UPDATE];
+const ROLE_LABELS = {
+  observer: "Observer",
+  analyzer: "Analyzer",
+  evaluator: "Evaluator",
+  deliver: "Deliver",
+  scheduler: "Scheduler",
+};
+
+// The union of every worker role's own minimal permission set - a worker can
+// declare more than one role at once (see WORKER_ROLES), so this is what a
+// single API key needs to operate as all five simultaneously.
+const COMPOSED_PERMISSIONS = [...new Set(WORKER_ROLES.flatMap((role) => WORKER_ROLE_PERMISSIONS[role]))];
 
 const columns = [
   { key: "label", label: "Label" },
@@ -71,12 +81,20 @@ const saving = ref(false);
 // { type: 'revoke' | 'delete', entry } | { type: 'bulk-revoke' | 'bulk-delete', kids }
 const pendingAction = ref(null);
 
-const canUseDispatcherPreset = computed(() =>
-  DISPATCHER_PERMISSIONS.every((p) => auth.permissions.includes(p))
+function canUseRolePreset(role) {
+  return WORKER_ROLE_PERMISSIONS[role].every((p) => auth.permissions.includes(p));
+}
+
+function useRolePreset(role) {
+  newPermissions.value = [...WORKER_ROLE_PERMISSIONS[role]];
+}
+
+const canUseComposedPreset = computed(() =>
+  COMPOSED_PERMISSIONS.every((p) => auth.permissions.includes(p))
 );
 
-function useDispatcherPreset() {
-  newPermissions.value = [...DISPATCHER_PERMISSIONS];
+function useComposedPreset() {
+  newPermissions.value = [...COMPOSED_PERMISSIONS];
 }
 
 function resolveDateParam(value) {
@@ -335,19 +353,36 @@ async function confirmPendingAction() {
         <div v-if="auth.permissions.length">
           <div class="flex items-center justify-between">
             <span class="block text-sm font-medium text-slate-700 dark:text-slate-300">Permissions</span>
-            <button
-              type="button"
-              :disabled="!canUseDispatcherPreset"
-              :title="
-                canUseDispatcherPreset
-                  ? `Select only the permissions a dispatcher worker needs: ${DISPATCHER_PERMISSIONS.join(', ')}`
-                  : `Requires ${DISPATCHER_PERMISSIONS.join(' and ')}, which you do not currently have`
-              "
-              class="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
-              @click="useDispatcherPreset"
-            >
-              Minimal dispatcher key
-            </button>
+            <div class="flex flex-wrap justify-end gap-1.5">
+              <button
+                v-for="role in WORKER_ROLES"
+                :key="role"
+                type="button"
+                :disabled="!canUseRolePreset(role)"
+                :title="
+                  canUseRolePreset(role)
+                    ? `Select only the permissions the ${role} role needs: ${WORKER_ROLE_PERMISSIONS[role].join(', ')}`
+                    : `Requires ${WORKER_ROLE_PERMISSIONS[role].join(' and ')}, which you do not currently have`
+                "
+                class="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
+                @click="useRolePreset(role)"
+              >
+                {{ ROLE_LABELS[role] }}
+              </button>
+              <button
+                type="button"
+                :disabled="!canUseComposedPreset"
+                :title="
+                  canUseComposedPreset
+                    ? `Select the union of every worker role's permissions: ${COMPOSED_PERMISSIONS.join(', ')}`
+                    : `Requires ${COMPOSED_PERMISSIONS.join(' and ')}, which you do not currently have`
+                "
+                class="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
+                @click="useComposedPreset"
+              >
+                Composed
+              </button>
+            </div>
           </div>
           <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
             Only your own current permissions can be granted to a key.

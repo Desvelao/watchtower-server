@@ -1,5 +1,8 @@
 local db = require("lapis.db")
 local route_helpers = require("lib.routes")
+local cjson = require("cjson")
+local zip_writer = require("lib.zip_writer")
+local zip_reader = require("lib.zip_reader")
 
 local M = {}
 
@@ -64,7 +67,14 @@ function M:get_name(role_id)
 end
 
 -- Parses+validates create/update params. Returns (row, nil) or (nil, err).
-function M:_derive(params)
+-- `is_create` mirrors services/users.lua's own M:_derive: on create, an
+-- omitted `permissions` defaults to {} (a brand-new role with no
+-- permissions); on update, an omitted `permissions` is left untouched
+-- entirely (not included in the returned row at all) rather than wiping the
+-- role's existing permission set - the route's own validation
+-- (types.empty + types.array_of(...)) allows omitting it on both
+-- POST and PUT, so the service layer is what must draw this distinction.
+function M:_derive(params, is_create)
   local name = params.name
   if type(name) ~= "string" or name == "" then
     return nil, "name is required"
@@ -72,28 +82,30 @@ function M:_derive(params)
 
   local permissions = params.permissions
   if permissions == nil then
-    permissions = {}
+    if is_create then
+      permissions = {}
+    end
   elseif type(permissions) ~= "table" then
     return nil, "permissions must be an array"
   end
 
-  for _, perm in ipairs(permissions) do
-    if not self._valid_permissions[perm] then
-      return nil, "Unknown permission: " .. tostring(perm)
+  local row = { name = name }
+
+  if permissions ~= nil then
+    for _, perm in ipairs(permissions) do
+      if not self._valid_permissions[perm] then
+        return nil, "Unknown permission: " .. tostring(perm)
+      end
     end
+
+    -- Postgres can't infer an empty ARRAY[]'s element type even in a typed
+    -- INSERT target list ("cannot determine type of empty array") - db.raw
+    -- with an explicit cast sidesteps db.array({})'s untyped ARRAY[].
+    row.permissions = #permissions > 0 and db.array(permissions)
+      or db.raw("ARRAY[]::varchar[]")
   end
 
-  -- Postgres can't infer an empty ARRAY[]'s element type even in a typed
-  -- INSERT target list ("cannot determine type of empty array") - db.raw
-  -- with an explicit cast sidesteps db.array({})'s untyped ARRAY[].
-  local permissions_value = #permissions > 0 and db.array(permissions)
-    or db.raw("ARRAY[]::varchar[]")
-
-  return {
-    name = name,
-    permissions = permissions_value,
-  },
-    nil
+  return row, nil
 end
 
 function M:list(request)
@@ -138,8 +150,16 @@ function M:find(id)
   return self._model:find({ id = id })
 end
 
+-- Resolves a role by its unique `name` rather than id - needed here (export
+-- collision checks) and by services/users.lua (resolving a user's `role`
+-- name, exported/imported in place of the DB-internal role_id) to reference
+-- a role portably across environments/exports.
+function M:find_by_name(name)
+  return self._model:find({ name = name })
+end
+
 function M:create(params)
-  local row, err = self:_derive(params)
+  local row, err = self:_derive(params, true)
   if not row then
     return nil, err
   end
@@ -165,7 +185,7 @@ function M:update(id, params)
     return nil, "Role not found"
   end
 
-  local row, err = self:_derive(params)
+  local row, err = self:_derive(params, false)
   if not row then
     return nil, err
   end
@@ -209,6 +229,135 @@ function M:delete(id)
 
   self:_notify_change()
   return result
+end
+
+-- Filesystem-safe entry name for a role inside a multi-role export zip -
+-- same 3-line helper as plugins/rules/services/rules.lua's own slugify,
+-- duplicated rather than extracted for two call sites.
+local function slugify(name)
+  local slug = name:lower():gsub("[^%w]+", "-"):gsub("^%-+", ""):gsub("%-+$", "")
+  if slug == "" then
+    slug = "role"
+  end
+  return slug
+end
+
+-- A role exports as plain {name, permissions} JSON - no password-style
+-- secret to strip, unlike users. `ids`, if given, is an array of role ids
+-- to export; nil/empty exports every role. Returns (content, content_type,
+-- filename) on success, or (nil, nil, nil, error_message) when nothing
+-- matches. A single matching role stays one .json file; 2+ are packed into
+-- a .zip (one .json per role) via lib/zip_writer - see
+-- plugins/rules/services/rules.lua's M:export for the identical shape.
+function M:export(ids)
+  local query = "order by id asc"
+  if ids and #ids > 0 then
+    local escaped = {}
+    for _, id in ipairs(ids) do
+      table.insert(escaped, db.escape_literal(tonumber(id)))
+    end
+    query = "where id in (" .. table.concat(escaped, ", ") .. ") order by id asc"
+  end
+
+  local items = self._model:select(query)
+
+  if #items == 0 then
+    return nil, nil, nil, "No roles to export"
+  end
+
+  local function to_export(row)
+    return { name = row.name, permissions = row.permissions or {} }
+  end
+
+  if #items == 1 then
+    return cjson.encode(to_export(items[1])), "application/json; charset=utf-8", "roles-export.json"
+  end
+
+  local files = {}
+  for _, item in ipairs(items) do
+    table.insert(files, {
+      name = slugify(item.name) .. "-" .. item.id .. ".json",
+      content = cjson.encode(to_export(item)),
+    })
+  end
+  return zip_writer.build(files), "application/zip", "roles-export.zip"
+end
+
+local ZIP_MAGIC = "PK\3\4" -- zip local-file-header signature
+
+-- Parses (but does not save) an uploaded role file or zip of role files -
+-- see plugins/rules/services/rules.lua's M:preflight_import for the
+-- identical shape/precedent (zip-magic-byte sniff, one candidate per
+-- entry). Returns an array of either `{ file, error }` (failed to parse) or
+-- `{ file, name, permissions, conflict: {id, name}|nil }` (parsed ok, with
+-- an existing same-named role flagged for the caller to resolve). Nothing
+-- is written to the DB - see M:commit_import for that.
+function M:preflight_import(filename, bytes)
+  local entries
+  if bytes:sub(1, 4) == ZIP_MAGIC then
+    local files, err = zip_reader.read(bytes)
+    if not files then
+      return nil, "Could not read zip: " .. err
+    end
+    entries = files
+  else
+    entries = { { name = filename, content = bytes } }
+  end
+
+  local candidates = {}
+  for _, entry in ipairs(entries) do
+    local ok, payload = pcall(cjson.decode, entry.content)
+    if not ok or type(payload) ~= "table" then
+      table.insert(candidates, { file = entry.name, error = "Invalid JSON: " .. tostring(payload) })
+    else
+      local row, derive_err = self:_derive(payload, true)
+      if not row then
+        table.insert(candidates, { file = entry.name, error = derive_err })
+      else
+        local candidate = { file = entry.name, name = payload.name, permissions = payload.permissions or {} }
+        local existing = self:find_by_name(payload.name)
+        if existing then
+          candidate.conflict = { id = existing.id, name = existing.name }
+        end
+        table.insert(candidates, candidate)
+      end
+    end
+  end
+
+  return candidates
+end
+
+-- `items` is the frontend's resolved decisions from a preflight_import
+-- result: `{ name, permissions, action = "create" | "update",
+-- existing_id? }[]`. Reuses M:create/M:update exactly as the single-role
+-- form does - no validation logic is duplicated here. Any `action` other
+-- than exactly "create" or "update" (with a truthy `existing_id`) -
+-- including the documented "skip" option, nil, or a typo - is rejected as
+-- a no-op rather than falling through to create. Returns a parallel array
+-- of `{ ok, error? }`, one per item, never aborting the batch over one bad
+-- item (mirrors plugins/rules/services/rules.lua's own M:commit_import).
+function M:commit_import(items)
+  local results = {}
+  for _, item in ipairs(items) do
+    local ok, row, err = pcall(function()
+      if item.action == "update" and item.existing_id then
+        return self:update(item.existing_id, { name = item.name, permissions = item.permissions })
+      elseif item.action == "create" then
+        return self:create({ name = item.name, permissions = item.permissions })
+      end
+      return nil, "Unsupported action '" .. tostring(item.action) .. "' (expected 'create', or 'update' with existing_id)"
+    end)
+
+    if ok and row then
+      table.insert(results, { ok = true })
+    elseif ok then
+      table.insert(results, { ok = false, error = err })
+    else
+      local error_message = type(row) == "table" and row.message or tostring(row)
+      table.insert(results, { ok = false, error = error_message })
+    end
+  end
+  return results
 end
 
 return M

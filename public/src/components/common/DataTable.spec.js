@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mount } from "@vue/test-utils";
 import DataTable from "./DataTable.vue";
 import PaginationControls from "./PaginationControls.vue";
@@ -132,6 +132,57 @@ describe("DataTable", () => {
     it("renders PaginationControls when pagination is provided", () => {
       const wrapper = mountTable({ pagination: { from: 0, size: 20 }, totalItems: 2 });
       expect(wrapper.findComponent(PaginationControls).exists()).toBe(true);
+    });
+  });
+
+  describe("auto-refresh", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      localStorage.clear();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("defaults the interval select to Off and never emits refresh purely from elapsed time", () => {
+      const wrapper = mountTable();
+      const select = wrapper.find('select[aria-label="Auto-refresh interval"]');
+      expect(select.element.value).toBe("0");
+
+      vi.advanceTimersByTime(5 * 60 * 1000);
+      expect(wrapper.emitted("refresh")).toBeUndefined();
+    });
+
+    it("emits refresh after the selected interval elapses", async () => {
+      const wrapper = mountTable();
+      const select = wrapper.find('select[aria-label="Auto-refresh interval"]');
+      await select.setValue("10000");
+
+      vi.advanceTimersByTime(10000);
+      expect(wrapper.emitted("refresh")).toHaveLength(1);
+    });
+
+    it("does not emit refresh while loading, but does once loading flips back to false", async () => {
+      const wrapper = mountTable({ loading: true });
+      const select = wrapper.find('select[aria-label="Auto-refresh interval"]');
+      await select.setValue("10000");
+
+      vi.advanceTimersByTime(10000);
+      expect(wrapper.emitted("refresh")).toBeUndefined();
+
+      await wrapper.setProps({ loading: false });
+      vi.advanceTimersByTime(10000);
+      expect(wrapper.emitted("refresh")).toHaveLength(1);
+    });
+
+    it("stops ticking after unmount without throwing", async () => {
+      const wrapper = mountTable();
+      const select = wrapper.find('select[aria-label="Auto-refresh interval"]');
+      await select.setValue("10000");
+
+      wrapper.unmount();
+      expect(() => vi.advanceTimersByTime(60000)).not.toThrow();
     });
   });
 });

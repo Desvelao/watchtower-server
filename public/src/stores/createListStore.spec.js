@@ -92,8 +92,8 @@ describe("createListStore", () => {
 
     it("setSort updates sort and refetches", async () => {
       const { store, listFn } = makeStore();
-      await store.setSort("priority_value:asc");
-      expect(store.sort).toBe("priority_value:asc");
+      await store.setSort("severity_value:asc");
+      expect(store.sort).toBe("severity_value:asc");
       expect(listFn).toHaveBeenCalledTimes(1);
     });
 

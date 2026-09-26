@@ -1,2 +1,4 @@
 data
-outputs
+worker_config
+worker_plugins
+tasks.csv

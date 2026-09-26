@@ -1,9 +1,9 @@
-# Standalone scrape worker: Lua 5.1 + LuaRocks built from source on
+# Standalone observe worker: Lua 5.1 + LuaRocks built from source on
 # Alpine (no OpenResty needed - this is a plain Lua process, not an nginx
-# worker), matching pibuzz's docker/worker/Dockerfile{,.dev} pattern.
+# worker).
 # Build context is the repo root (see dev/docker-compose.yml) so this can
-# reuse the scraper plugin's xml-dependency fix (see
-# server/plugins/scraper_remote_config_lua/{setup.sh,xml.rockspec}) instead
+# reuse the observer_configs plugin's xml-dependency fix (see
+# server/plugins/observer_configs/{setup.sh,xml.rockspec}) instead
 # of duplicating it.
 FROM alpine:3.20
 
@@ -37,23 +37,32 @@ RUN set -ex \
     && apk add gcc musl-dev build-base openssl-dev git zlib-dev \
     && apk del .build-deps \
     # This from-source build installs a plain `luarocks` binary, not the
-    # `luarocks-5.1` name the scraper plugin's setup.sh assumes (that
+    # `luarocks-5.1` name the observer_configs plugin's setup.sh assumes (that
     # name only exists on the OpenResty image's Alpine-packaged luarocks,
     # see docker/images/dev/lapis/Dockerfile) - symlink so the same
     # unmodified script works here too.
     && ln -s "$(command -v luarocks)" /usr/local/bin/luarocks-5.1
 
 # webscraper's xml dependency needs a patched rockspec - see
-# server/plugins/scraper_remote_config_lua/setup.sh's header comment for
+# server/plugins/observer_configs/setup.sh's header comment for
 # why (upstream's rockspec doesn't build cleanly under luarocks 3.x).
-COPY server/plugins/scraper_remote_config_lua/setup.sh /tmp/scraper-setup/setup.sh
-COPY server/plugins/scraper_remote_config_lua/xml.rockspec /tmp/scraper-setup/xml.rockspec
+COPY server/plugins/observer_configs/setup.sh /tmp/scraper-setup/setup.sh
+COPY server/plugins/observer_configs/xml.rockspec /tmp/scraper-setup/xml.rockspec
 RUN cd /tmp/scraper-setup && sh setup.sh && cd / && rm -rf /tmp/scraper-setup
 
-RUN luarocks-5.1 install lua-cjson \
-    && luarocks-5.1 install luasec \
-    && luarocks-5.1 install luasocket \
-    && luarocks-5.1 install luastash
+# Pinned dependency versions - see
+# docker/rockspecs/watchtower-worker-deps-1.0-1.rockspec for the exact list
+# and per-rock rationale.
+COPY docker/rockspecs/watchtower-worker-deps-1.0-1.rockspec /tmp/watchtower-worker-deps-1.0-1.rockspec
+RUN luarocks-5.1 install --only-deps /tmp/watchtower-worker-deps-1.0-1.rockspec \
+    && rm -f /tmp/watchtower-worker-deps-1.0-1.rockspec
+
+# Dedicated, unprivileged service user - /app is bind-mounted for live
+# editing (see dev/docker-compose.yml), read-only from this process's own
+# point of view, so no chown is needed.
+RUN addgroup -g 1000 -S watchtower \
+    && adduser -S -D -H -u 1000 -G watchtower -s /sbin/nologin watchtower
+USER watchtower
 
 WORKDIR /app
 

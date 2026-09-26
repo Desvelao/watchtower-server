@@ -1,10 +1,12 @@
 <script setup>
-import { ref, watch } from 'vue';
+import { onMounted, ref, watch } from 'vue';
 import { useAlertsStore } from '../stores/alerts';
+import { useObservableTypesStore } from '../stores/observableTypes';
 import { getAlert } from '../services/api/alerts';
 import { formatDate } from '../utils/date';
-import AlertStatusBadge from './AlertStatusBadge.vue';
-import AlertPriorityBadge from './AlertPriorityBadge.vue';
+import { observableTypeLabel } from '../utils/observableType';
+import AlertSeverityBadge from './AlertSeverityBadge.vue';
+import Flyout from './common/Flyout.vue';
 
 const props = defineProps({
   alertId: { type: [String, Number], default: null },
@@ -13,6 +15,11 @@ const props = defineProps({
 const emit = defineEmits(['close']);
 
 const store = useAlertsStore();
+const observableTypesStore = useObservableTypesStore();
+
+onMounted(() => {
+  if (!observableTypesStore.items.length) observableTypesStore.fetchList();
+});
 
 const alert = ref(null);
 const loading = ref(false);
@@ -47,29 +54,11 @@ watch(
 </script>
 
 <template>
-  <div
-    v-if="alertId"
-    class="fixed inset-0 z-50 flex justify-end bg-slate-900/40"
-    @click.self="emit('close')"
-  >
-    <div class="h-full w-full max-w-lg overflow-y-auto bg-white p-5 shadow-xl dark:bg-slate-800">
-      <div class="flex items-center justify-between">
-        <h2 class="text-base font-semibold text-slate-900 dark:text-slate-100">Alert #{{ alertId }}</h2>
-        <button
-          type="button"
-          title="Close"
-          aria-label="Close"
-          class="rounded p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-100"
-          @click="emit('close')"
-        >
-          ✕
-        </button>
-      </div>
+  <Flyout :open="!!alertId" :title="`Alert #${alertId}`" @close="emit('close')">
+    <p v-if="loading" class="mt-4 text-sm text-slate-500 dark:text-slate-400">Loading...</p>
+    <p v-else-if="error" class="mt-4 text-sm text-red-600 dark:text-red-400">{{ error }}</p>
 
-      <p v-if="loading" class="mt-4 text-sm text-slate-500 dark:text-slate-400">Loading...</p>
-      <p v-else-if="error" class="mt-4 text-sm text-red-600 dark:text-red-400">{{ error }}</p>
-
-      <template v-else-if="alert">
+    <template v-else-if="alert">
         <section class="mt-4">
           <h3 class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Details</h3>
           <table class="mt-2 w-full text-sm">
@@ -79,24 +68,16 @@ watch(
                 <td class="py-1.5">{{ alert.id }}</td>
               </tr>
               <tr>
-                <td class="py-1.5 pr-3 text-slate-500 dark:text-slate-400">Status</td>
-                <td class="py-1.5"><AlertStatusBadge :status="alert.status" /></td>
+                <td class="py-1.5 pr-3 text-slate-500 dark:text-slate-400">Severity</td>
+                <td class="py-1.5"><AlertSeverityBadge :severity="alert.severity" /></td>
               </tr>
               <tr>
-                <td class="py-1.5 pr-3 text-slate-500 dark:text-slate-400">Priority</td>
-                <td class="py-1.5"><AlertPriorityBadge :priority="alert.priority" /></td>
+                <td class="py-1.5 pr-3 text-slate-500 dark:text-slate-400">Type</td>
+                <td class="py-1.5">{{ observableTypeLabel(alert.observable_type_id, observableTypesStore.items) }}</td>
               </tr>
               <tr>
                 <td class="py-1.5 pr-3 text-slate-500 dark:text-slate-400">Payload</td>
                 <td class="py-1.5">{{ alert.payload || '-' }}</td>
-              </tr>
-              <tr>
-                <td class="py-1.5 pr-3 text-slate-500 dark:text-slate-400">Action</td>
-                <td class="py-1.5">
-                  <span :class="alert.pattern ? '' : 'italic text-slate-400 dark:text-slate-500'">
-                    {{ alert.pattern || 'No rule matched' }}
-                  </span>
-                </td>
               </tr>
               <tr>
                 <td class="py-1.5 pr-3 text-slate-500 dark:text-slate-400">Matched rule</td>
@@ -116,8 +97,8 @@ watch(
                 <td class="py-1.5">{{ alert.source || '-' }}</td>
               </tr>
               <tr>
-                <td class="py-1.5 pr-3 text-slate-500 dark:text-slate-400">Item</td>
-                <td class="py-1.5">{{ alert.item_id || '-' }}</td>
+                <td class="py-1.5 pr-3 text-slate-500 dark:text-slate-400">Observable</td>
+                <td class="py-1.5">{{ alert.observable_id || '-' }}</td>
               </tr>
               <tr>
                 <td class="py-1.5 pr-3 text-slate-500 dark:text-slate-400">Tags</td>
@@ -133,18 +114,6 @@ watch(
                 </td>
               </tr>
               <tr>
-                <td class="py-1.5 pr-3 text-slate-500 dark:text-slate-400">Monitor</td>
-                <td class="py-1.5">{{ alert.monitor || '-' }}</td>
-              </tr>
-              <tr>
-                <td class="py-1.5 pr-3 text-slate-500 dark:text-slate-400">Monitor taken at</td>
-                <td class="py-1.5">{{ formatDate(alert.monitor_take_at) }}</td>
-              </tr>
-              <tr>
-                <td class="py-1.5 pr-3 text-slate-500 dark:text-slate-400">Monitor acked at</td>
-                <td class="py-1.5">{{ formatDate(alert.monitor_ack_at) }}</td>
-              </tr>
-              <tr>
                 <td class="py-1.5 pr-3 text-slate-500 dark:text-slate-400">Created</td>
                 <td class="py-1.5">{{ formatDate(alert.created_at) }}</td>
               </tr>
@@ -155,7 +124,6 @@ watch(
             </tbody>
           </table>
         </section>
-      </template>
-    </div>
-  </div>
+    </template>
+  </Flyout>
 </template>

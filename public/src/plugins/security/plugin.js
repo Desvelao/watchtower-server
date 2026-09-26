@@ -5,6 +5,9 @@ import RolesListView from './views/RolesListView.vue';
 import RoleFormView from './views/RoleFormView.vue';
 import ApiKeysView from './views/ApiKeysView.vue';
 import { PERMISSIONS } from '../../constants/permissions';
+import IconUsers from '../../components/common/icons/IconUsers.vue';
+import IconShield from '../../components/common/icons/IconShield.vue';
+import IconKey from '../../components/common/icons/IconKey.vue';
 
 const plugin = {
   name: 'security',
@@ -16,7 +19,7 @@ const plugin = {
       route: '/users',
       component: UsersListView,
       name: 'Users',
-      icon: 'mdi-account-multiple-outline',
+      icon: IconUsers,
       permission: PERMISSIONS.USERS_READ,
     });
     core.router.addRoute({
@@ -35,7 +38,7 @@ const plugin = {
       route: '/roles',
       component: RolesListView,
       name: 'Roles',
-      icon: 'mdi-shield-account-outline',
+      icon: IconShield,
       permission: PERMISSIONS.ROLES_READ,
     });
     core.router.addRoute({
@@ -54,7 +57,7 @@ const plugin = {
       route: '/keys',
       component: ApiKeysView,
       name: 'API Keys',
-      icon: 'mdi-key-outline',
+      icon: IconKey,
       permission: PERMISSIONS.API_KEY_MANAGE,
     });
   },

@@ -8,6 +8,28 @@ docker compose up -d
 
 Go to http://localhost:3000 to access to the UI.
 
+## Non-root service user
+
+All four Docker images (dev/prod `lapis`, dev/prod `worker`) create and run as a
+dedicated, unprivileged `watchtower` user (uid/gid `1000`) by default - see
+`CLAUDE.md`'s `docker/` layout section.
+
+If you're updating an existing dev checkout that ran these containers as root
+before this change, one-time cleanup is needed: nginx's previously-created
+`server/logs/`, `server/client_body_temp/`, `server/proxy_temp/`,
+`server/fastcgi_temp/`, `server/scgi_temp/`, `server/uwsgi_temp/`, and
+`server/nginx.conf.compiled` (all gitignored) are still owned by `root`/`nobody`
+from those earlier runs, so the new non-root container can't write into them.
+Remove them (likely needs `sudo`, since they're not owned by your host user)
+before restarting the stack so nginx recreates them fresh as uid `1000`:
+
+```console
+sudo rm -rf server/logs server/client_body_temp server/proxy_temp \
+  server/fastcgi_temp server/scgi_temp server/uwsgi_temp \
+  server/nginx.conf.compiled
+docker compose up -d
+```
+
 ## Follow logs
 
 ```console
@@ -60,13 +82,21 @@ list and `docs/dev/worker-configuration.md` for how a worker authenticates.
 See `docs/dev/worker-configuration.md` — the `worker` service is idle by
 default (no `WORKER_CONFIG_FILE`/`SERVER_API_KEY` configured yet).
 
+Note: `WORKER_CONFIG_FILE`'s `plugins` field defaults to `{}` — this applies
+to the embedded worker (`lapis` service) too, so even with `USE_EMBED_WORKER=1`
+nothing actually observes until a `WORKER_CONFIG_FILE` exists and its `plugins`
+array names `"watchtower_observer_web_scraper.plugin"` (see
+`docker/worker/worker_config.example.lua`). Third-party plugin modules go in
+`worker_plugins/` (gitignored, bind-mounted into both `lapis` and `worker`)
+and are referenced by module path the same way.
+
 ## Dev references
 
 lapis: https://leafo.net/lapis/reference.html
 tableshape: https://github.com/leafo/tableshape
 vite: https://vite.dev/
-vuetify:https://vuetifyjs.com
-icons: https://pictogrammers.com/library/mdi/
+tailwindcss: https://tailwindcss.com/
+pinia: https://pinia.vuejs.org/
 
 # Source to production server
 

@@ -7,6 +7,8 @@ export const useUsersStore = createListStore('users', {
     role_id: '',
     enabled: '',
     search: '',
+    created_after: '',
+    created_before: '',
   },
   sort: 'username:asc',
   listFn: usersApi.listUsers,

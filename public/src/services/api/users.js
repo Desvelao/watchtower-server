@@ -26,3 +26,25 @@ export async function deleteUser(id) {
   const res = await http(`${base}/${id}`, { method: 'delete' });
   return res.body; // { message }
 }
+
+// `ids` (optional array) exports just those users; omitted/empty exports
+// all. `content` is a plain object (a single user - http.js already
+// parses an `application/json` response body for us) or a Blob (2+ users,
+// zipped) - same shape as services/api/rules.js's own exportRules.
+export async function exportUsers(ids) {
+  const query = ids && ids.length ? `?ids=${ids.join(',')}` : '';
+  const res = await http(`${base}/export${query}`);
+  return { content: res.body, contentType: res.headers.get('content-type') || '' };
+}
+
+export async function preflightUsersImport(file) {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await http(`${base}/import/preflight`, { method: 'post', body: formData });
+  return res.body; // { items: candidates }
+}
+
+export async function commitUsersImport(items) {
+  const res = await http(`${base}/import`, { method: 'post', body: { items } });
+  return res.body; // { results }
+}

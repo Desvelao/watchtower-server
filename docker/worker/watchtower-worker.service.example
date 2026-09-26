@@ -1,0 +1,66 @@
+# Example systemd service unit for running the standalone watchtower-server
+# worker as a one-shot job (see docs/dev/worker-configuration.md's "Running
+# as a one-shot job (cron / systemd)" section for what --once actually does).
+# Pair this with watchtower-worker.timer.example to have systemd invoke
+# it on a schedule, instead of running the worker as a persistent process.
+#
+# Copy to e.g. /etc/systemd/system/watchtower-worker.service and adjust
+# every field marked ADJUST below. `systemctl daemon-reload` after editing.
+#
+# Build the production worker image from docker/images/prod/worker/Dockerfile
+# (see docker/images/prod/worker/README.md), or pull the one
+# .github/workflows/docker-publish.yml publishes to
+# ghcr.io/<repo>-worker on every version tag, e.g.:
+#   docker build -f docker/images/prod/worker/Dockerfile -t watchtower-worker:latest .
+# (build context must be the repo root - the image reuses
+# server/plugins/observer_configs's setup.sh). Adjust the `docker run` line
+# below once you have your own image/tag/registry.
+
+[Unit]
+Description=watchtower-server standalone worker (one-shot)
+# Only meaningful if this host also runs the watchtower-server server/db via
+# Docker Compose or systemd units of their own - ADJUST or remove.
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+
+# ADJUST: where WORKER_CONFIG_FILE/env-files/secrets live on this host.
+WorkingDirectory=/opt/watchtower
+
+# ADJUST: image name/tag, WORKER_CONFIG_FILE mount path, and the env vars
+# below (or point --env-file at a real file instead of listing -e flags).
+# --once is what makes this a single pass instead of the persistent loop -
+# see worker/lua/main.lua's resolve_run_once(). --rm cleans up the
+# container on exit so repeated timer firings don't accumulate stopped
+# containers.
+#
+# ADJUST --network: Compose's default project name is the directory
+# `docker compose` was invoked from (`dev_default` if run as
+# `cd dev && docker compose up`, per CLAUDE.md) - `docker network ls` to
+# confirm, or pin it with a top-level `name:` in dev/docker-compose.yml.
+ExecStart=/usr/bin/docker run --rm \
+  --name watchtower-worker-once \
+  --network dev_default \
+  -v /opt/watchtower/worker_config:/etc/watchtower:ro \
+  -e WORKER_CONFIG_FILE=/etc/watchtower/worker_config.lua \
+  -e SERVER_API_KEY_FILE=/run/secrets/server_api_key \
+  -v /opt/watchtower/secrets/server_api_key:/run/secrets/server_api_key:ro \
+  -v /opt/watchtower/worker_plugins:/worker_plugins:ro \
+  -e LUA_PATH="/shared/?.lua;/shared/?/init.lua;/worker_plugins/?.lua;/worker_plugins/?/init.lua;;" \
+  watchtower-worker:latest \
+  lua /app/main.lua --once
+
+# ADJUST: run as a non-root user/group if your Docker setup allows it
+# (rootless Docker, or a dedicated service account in the docker group).
+# User=watchtower
+# Group=watchtower
+
+# A one-shot pass should be quick - the batch pollers each claim/process/
+# report a single already-queued job. Adjust upward if a single observe
+# batch is expected to take longer than this.
+TimeoutStartSec=300
+
+# No [Install] section - this unit is meant to be triggered by
+# watchtower-worker.timer.example, not enabled/started directly.

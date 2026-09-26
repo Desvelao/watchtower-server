@@ -4,59 +4,27 @@ import { app } from './core';
 import { useAuthStore } from './stores/auth';
 import { useThemeStore } from './stores/theme';
 
-// Vuetify
-import 'vuetify/styles';
-import { createVuetify } from 'vuetify';
-import * as components from 'vuetify/components';
-import * as directives from 'vuetify/directives';
-
-// Material Design Styles
-import '@mdi/font/css/materialdesignicons.css'; // Ensure you are using css-loader
-import { aliases, mdi } from 'vuetify/iconsets/mdi';
-
-// Vuetify Labs
-import { VIconBtn } from 'vuetify/labs/VIconBtn';
-
-// Tailwind (the new Pinia + Tailwind plugins: security, rules, events,
-// monitors, jobs, alerting - see assets/tailwind.css's header comment)
 import './assets/tailwind.css';
 
 // Plugin system
 import { PluginSystem } from './core/services/plugin-service';
-import ItemsPlugin from './plugins/items/plugin';
-import ObservationsPlugin from './plugins/observations/plugin';
+import EntitiesPlugin from './plugins/entities/plugin';
 import NotificationChannelsPlugin from './plugins/notification_channels/plugin';
-import ScraperPlugin from './plugins/scrapers/plugin';
+import ObserverConfigsPlugin from './plugins/observer_configs/plugin';
 import SecurityPlugin from './plugins/security/plugin';
 import RulesPlugin from './plugins/rules/plugin';
-import EventsPlugin from './plugins/events/plugin';
 import AlertingPlugin from './plugins/alerting/plugin';
-import MonitorsPlugin from './plugins/monitors/plugin';
+import WorkersPlugin from './plugins/workers/plugin';
+import SchedulerPlugin from './plugins/scheduler/plugin';
 import JobsPlugin from './plugins/jobs/plugin';
 
 // Hightlight code
 import { HighCode } from 'vue-highlight-code';
 import 'vue-highlight-code/dist/style.css';
 
-const vuetify = createVuetify({
-  components: {
-    ...components,
-    VIconBtn,
-    HighCode,
-  },
-  directives,
-  icons: {
-    defaultSet: 'mdi',
-    aliases,
-    sets: {
-      mdi,
-    },
-  },
-});
-
 const vueApp = createApp(app.view);
 vueApp.use(createPinia());
-vueApp.use(vuetify);
+vueApp.component('HighCode', HighCode);
 
 useThemeStore().restore();
 
@@ -64,15 +32,14 @@ const pluginSystem = new PluginSystem();
 
 pluginSystem
   .addPlugin(SecurityPlugin)
-  .addPlugin(ItemsPlugin)
+  .addPlugin(EntitiesPlugin)
   .addPlugin(RulesPlugin)
-  .addPlugin(EventsPlugin)
   .addPlugin(AlertingPlugin)
-  .addPlugin(ObservationsPlugin)
-  .addPlugin(MonitorsPlugin)
+  .addPlugin(WorkersPlugin)
+  .addPlugin(SchedulerPlugin)
   .addPlugin(JobsPlugin)
   .addPlugin(NotificationChannelsPlugin)
-  .addPlugin(ScraperPlugin)
+  .addPlugin(ObserverConfigsPlugin)
   .run(app);
 
 // Awaited before mounting so the router guard (core/router.js) never sees

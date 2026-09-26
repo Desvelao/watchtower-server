@@ -68,5 +68,23 @@ jobs:
           context: .
           file: docker/images/dev/worker/Dockerfile
           push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=worker-dev
+          cache-to: type=gha,mode=max,scope=worker-dev
+
+  worker-image-prod:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build prod worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/images/prod/worker/Dockerfile
+          push: false
+          cache-from: type=gha,scope=worker-prod
+          cache-to: type=gha,mode=max,scope=worker-prod

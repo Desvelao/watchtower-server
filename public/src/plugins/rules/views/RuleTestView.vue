@@ -1,16 +1,21 @@
 <script setup>
-import { reactive, ref } from 'vue';
+import { onMounted, reactive, ref } from 'vue';
 import { testRule, testExpression } from '../../../services/api/rules';
 import { HTTPError } from '../../../services/api/http';
+import { useObservableTypesStore } from '../../../stores/observableTypes';
+
+const observableTypesStore = useObservableTypesStore();
+
+onMounted(() => {
+  if (!observableTypesStore.items.length) observableTypesStore.fetchList();
+});
 
 const form = reactive({
   source: '',
-  tags: '',
-  item_id: '',
-  price: '',
-  discount: '',
-  available: '',
-  url: '',
+  observable_id: '',
+  worker: '',
+  observable_type: '',
+  payload: '',
   expression: '',
 });
 
@@ -21,19 +26,12 @@ const expressionResult = ref(null);
 const expressionError = ref('');
 
 function toRequestBody() {
-  const tags = form.tags
-    .split(',')
-    .map((t) => t.trim())
-    .filter(Boolean);
-
   const body = { source: form.source };
 
-  if (tags.length > 0) body.tags = tags;
-  if (form.item_id !== '') body.item_id = form.item_id;
-  if (form.price !== '') body.price = Number(form.price);
-  if (form.discount !== '') body.discount = form.discount;
-  if (form.available !== '') body.available = form.available === 'true';
-  if (form.url !== '') body.url = form.url;
+  if (form.observable_id !== '') body.observable_id = form.observable_id;
+  if (form.worker !== '') body.worker = form.worker;
+  if (form.observable_type !== '') body.observable_type = form.observable_type;
+  if (form.payload.trim() !== '') body.payload = form.payload;
 
   return body;
 }
@@ -57,7 +55,7 @@ async function onSubmit() {
   }
 
   // Optional: also preview a draft `if:` expression against the same
-  // sample event, without it needing to be saved as a rule first.
+  // sample observation, without it needing to be saved as a rule first.
   if (form.expression.trim()) {
     try {
       const result = await testExpression({ if: form.expression, ...toRequestBody() });
@@ -80,54 +78,56 @@ async function onSubmit() {
   <div class="max-w-xl">
     <h1 class="text-xl font-semibold text-slate-900 dark:text-slate-100">Test rules</h1>
     <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">
-      Enter a sample event's properties to see which enabled
+      Enter a sample observation's properties to see which enabled
       <RouterLink to="/rules" class="underline">rules</RouterLink>
-      would match and what alert(s) would be generated. Nothing here is saved - no event or alert is
-      created.
+      would match and what alert(s) would be generated. Nothing here is saved - no observation or alert
+      is created.
     </p>
 
     <form class="mt-4 space-y-4 rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800" @submit.prevent="onSubmit">
       <fieldset class="space-y-4 rounded border border-slate-200 p-4 dark:border-slate-700">
-        <legend class="px-1 text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Event</legend>
+        <legend class="px-1 text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Observation</legend>
         <div>
           <label for="test-source" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Source</label>
           <input id="test-source" v-model="form.source" type="text" class="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100" />
         </div>
-        <div>
-          <label for="test-tags" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Tags</label>
-          <input
-            id="test-tags"
-            v-model="form.tags"
-            type="text"
-            placeholder="comma, separated, tags"
-            class="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
-          />
-        </div>
         <div class="grid grid-cols-2 gap-4">
           <div>
-            <label for="test-item-id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Item ID</label>
-            <input id="test-item-id" v-model="form.item_id" type="text" class="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100" />
+            <label for="test-observable-id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Observable ID</label>
+            <input id="test-observable-id" v-model="form.observable_id" type="text" class="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100" />
           </div>
           <div>
-            <label for="test-price" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Price</label>
-            <input id="test-price" v-model="form.price" type="number" step="0.01" class="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100" />
-          </div>
-          <div>
-            <label for="test-discount" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Discount</label>
-            <input id="test-discount" v-model="form.discount" type="text" class="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100" />
-          </div>
-          <div>
-            <label for="test-available" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Available</label>
-            <select id="test-available" v-model="form.available" class="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100">
-              <option value="">-</option>
-              <option value="true">true</option>
-              <option value="false">false</option>
-            </select>
+            <label for="test-worker" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Worker</label>
+            <input id="test-worker" v-model="form.worker" type="text" placeholder="e.g. worker-lua" class="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100" />
           </div>
         </div>
         <div>
-          <label for="test-url" class="block text-sm font-medium text-slate-700 dark:text-slate-300">URL</label>
-          <input id="test-url" v-model="form.url" type="text" class="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100" />
+          <label for="test-observable-type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Observable type</label>
+          <select
+            id="test-observable-type"
+            v-model="form.observable_type"
+            class="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
+          >
+            <option value="">Any</option>
+            <option v-for="type in observableTypesStore.items" :key="type.id" :value="type.name">
+              {{ type.label || type.name }}
+            </option>
+          </select>
+        </div>
+        <div>
+          <label for="test-payload" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Payload (JSON)</label>
+          <textarea
+            id="test-payload"
+            v-model="form.payload"
+            rows="3"
+            placeholder='e.g. {"price": 250, "available": true}'
+            class="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
+          />
+          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            An observation's fields aren't individually testable here since they vary by observable type - enter the
+            same JSON an observation's <code>properties</code> would have, and reference it in your expression as
+            <code>payload.&lt;field&gt;</code>.
+          </p>
         </div>
       </fieldset>
 
@@ -139,11 +139,11 @@ async function onSubmit() {
           id="test-expression"
           v-model="form.expression"
           type="text"
-          placeholder='e.g. price < 300 AND available = true'
+          placeholder='e.g. payload.price < 300 AND worker = "worker-lua"'
           class="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
         />
         <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-          Preview a draft condition against the sample event above, without saving it as a rule.
+          Preview a draft condition against the sample observation above, without saving it as a rule.
         </p>
       </div>
 
@@ -190,7 +190,6 @@ async function onSubmit() {
             >
               Rule #{{ match.id }}
             </RouterLink>
-            <span class="font-mono text-xs text-slate-500 dark:text-slate-400">{{ match.action }}</span>
           </div>
           <dl class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
             <dt>Severity</dt>

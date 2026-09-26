@@ -2,11 +2,12 @@ import { watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 // Two-way sync between a list store's `filters` and the current route's
-// query string - shared by every store-backed list view (Alerts, Events,
-// Deliveries, Rules).
+// query string - shared by every store-backed list view (Alerts,
+// Observations, Deliveries, Rules).
 //
 // Any store filter field can be deep-linked via a matching query param
-// (e.g. the Alerts table's "Event #N" column links to Events with `?id=`).
+// (e.g. the Alerts table's "Observation #N" column links to Observations
+// with `?id=`).
 // Watching route.query (not onMounted) is required so clicking between two
 // links that both resolve to the same route - which only changes the query
 // on an already-mounted instance - still re-applies the filter. The watch

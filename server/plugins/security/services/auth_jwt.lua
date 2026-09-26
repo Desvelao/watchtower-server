@@ -17,8 +17,8 @@ end
 
 -- `user_id` is the users.id primary key, not the username - keeping the
 -- identity carried through the whole auth chain (JWT payload, api_key
--- rows, users:find) numeric avoids pibuzz's known defect where api_keys
--- stored a bare username that a rename would silently orphan.
+-- rows, users:find) numeric avoids the defect a bare stored username would
+-- have: a rename would silently orphan it.
 function M:authenticate(user_id, role)
   local payload = {
     sub = user_id,
