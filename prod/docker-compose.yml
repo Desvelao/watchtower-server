@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   server:
-    image: ghcr.io/desvelao/watchtower-server:v0.1.0-alpha1
+    image: ghcr.io/desvelao/watchtower-server:0.1.0-alpha1
     container_name: watchtower-server
     ports:
       - "8080:8080" # Expose the Lapis server on port 8080
@@ -73,7 +73,7 @@ services:
   # service too). See docs/dev/worker-configuration.md for what
   # config.roles a standalone worker needs (default: {"observer"}).
   worker:
-    image: ghcr.io/desvelao/watchtower-worker:v0.1.0-alpha1
+    image: ghcr.io/desvelao/watchtower-worker:0.1.0-alpha1
     container_name: watchtower-worker
     volumes:
       - ${WORKER_CONFIG_DIR:-./worker_config}:/etc/watchtower

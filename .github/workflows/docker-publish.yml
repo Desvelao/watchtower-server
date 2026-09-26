@@ -24,7 +24,7 @@ jobs:
             image: ${{ github.repository }}
           - component: worker
             dockerfile: docker/images/prod/worker/Dockerfile
-            image: ${{ github.repository }}-worker
+            image: ${{ github.repository_owner }}/watchtower-worker
 
     steps:
       - name: Checkout repository
