@@ -2,9 +2,7 @@
 # Alpine (no OpenResty needed - this is a plain Lua process, not an nginx
 # worker).
 # Build context is the repo root (see dev/docker-compose.yml) so this can
-# reuse the observer_configs plugin's xml-dependency fix (see
-# server/plugins/observer_configs/{setup.sh,xml.rockspec}) instead
-# of duplicating it.
+# COPY the pinned docker/rockspecs/watchtower-worker-deps-1.0-1.rockspec below.
 FROM alpine:3.20
 
 ENV LUA_VERSION=5.1.5
@@ -37,18 +35,10 @@ RUN set -ex \
     && apk add gcc musl-dev build-base openssl-dev git zlib-dev \
     && apk del .build-deps \
     # This from-source build installs a plain `luarocks` binary, not the
-    # `luarocks-5.1` name the observer_configs plugin's setup.sh assumes (that
-    # name only exists on the OpenResty image's Alpine-packaged luarocks,
-    # see docker/images/dev/lapis/Dockerfile) - symlink so the same
-    # unmodified script works here too.
+    # `luarocks-5.1` name used below (and by docker/images/dev/lapis/Dockerfile,
+    # where it's the actual name of the OpenResty image's Alpine-packaged
+    # luarocks) - symlink so the same command works on both images.
     && ln -s "$(command -v luarocks)" /usr/local/bin/luarocks-5.1
-
-# webscraper's xml dependency needs a patched rockspec - see
-# server/plugins/observer_configs/setup.sh's header comment for
-# why (upstream's rockspec doesn't build cleanly under luarocks 3.x).
-COPY server/plugins/observer_configs/setup.sh /tmp/scraper-setup/setup.sh
-COPY server/plugins/observer_configs/xml.rockspec /tmp/scraper-setup/xml.rockspec
-RUN cd /tmp/scraper-setup && sh setup.sh && cd / && rm -rf /tmp/scraper-setup
 
 # Pinned dependency versions - see
 # docker/rockspecs/watchtower-worker-deps-1.0-1.rockspec for the exact list

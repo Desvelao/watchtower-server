@@ -10,11 +10,11 @@
 # Build the production worker image from docker/images/prod/worker/Dockerfile
 # (see docker/images/prod/worker/README.md), or pull the one
 # .github/workflows/docker-publish.yml publishes to
-# ghcr.io/<repo>-worker on every version tag, e.g.:
+# ghcr.io/<owner>/watchtower-worker on every version tag, e.g.:
 #   docker build -f docker/images/prod/worker/Dockerfile -t watchtower-worker:latest .
-# (build context must be the repo root - the image reuses
-# server/plugins/observer_configs's setup.sh). Adjust the `docker run` line
-# below once you have your own image/tag/registry.
+# (build context must be the repo root - the image needs
+# docker/rockspecs/watchtower-worker-deps-1.0-1.rockspec). Adjust the
+# `docker run` line below once you have your own image/tag/registry.
 
 [Unit]
 Description=watchtower-server standalone worker (one-shot)
