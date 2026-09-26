@@ -149,6 +149,12 @@ function M.build_config(mode, env)
     -- below) - not itself role-specific.
     config.interval = file_config.interval or 5
     config.heartbeat_interval = file_config.heartbeat_interval or 30
+    -- The heartbeat task's own post-failure retry backoff - deliberately a
+    -- separate field from config.interval/heartbeat_interval above, since
+    -- those both accept a cron expression string while this must always be
+    -- a plain number of seconds (watchtower_worker_core.lifecycle validates
+    -- it as such and drops the whole heartbeat task otherwise).
+    config.heartbeat_retry_interval = file_config.heartbeat_retry_interval or 5
     -- Which roles this worker process self-reports/runs - decoupled from
     -- any single role's own logic (see shared/watchtower_worker_core/processors.lua's
     -- has_role). Defaults to {"observer"} for backward compatibility with
@@ -175,6 +181,7 @@ function M.build_config(mode, env)
   elseif mode == "embedded" then
     config.interval = file_config.interval or 10
     config.heartbeat_interval = file_config.heartbeat_interval or 30
+    config.heartbeat_retry_interval = file_config.heartbeat_retry_interval or 5
     config.worker_id = "embedded"
     -- Always observer+analyzer (unchanged default); "scheduler"/"deliver"/
     -- "evaluator" are independently opt-in via their

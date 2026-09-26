@@ -37,13 +37,21 @@ return {
   -- never jittered (a cron expression is a wall-clock contract). An
   -- invalid cron expression is logged as a warning at worker boot and
   -- that one task is simply never scheduled, rather than failing the
-  -- whole worker. task.retry_interval (the post-failure backoff, not
-  -- exposed as a WORKER_CONFIG_FILE field itself) always stays numeric.
+  -- whole worker. task.retry_interval (the post-failure backoff) always
+  -- stays numeric, never a cron expression - for most tasks it's not a
+  -- separate WORKER_CONFIG_FILE field at all (it just falls back to that
+  -- task's own interval), but the heartbeat task is the one exception -
+  -- see heartbeat_retry_interval below.
   interval = 10,
 
   -- How often (seconds, or a cron expression - see interval above) to
   -- send a worker heartbeat.
   heartbeat_interval = 30,
+
+  -- Seconds to wait before retrying a failed heartbeat. Always a plain
+  -- number - never a cron expression - since heartbeat_interval above is
+  -- allowed to be one and so can't safely double as this value too.
+  heartbeat_retry_interval = 5,
 
   -- Only meaningful for mode = "loop" (the default - see below): whether
   -- each role's task(s) run immediately at worker boot, or wait for their

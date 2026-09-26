@@ -474,9 +474,13 @@ function M.build(plugins, context)
       name = "heartbeat",
       phase = phases.HEARTBEAT,
       interval = context.config.heartbeat_interval,
-      -- A failed heartbeat retries on the next poll rather than waiting a
+      -- A failed heartbeat retries after this backoff rather than waiting a
       -- full heartbeat_interval, so registration isn't delayed by a blip.
-      retry_interval = context.config.interval,
+      -- Its own dedicated config field (always a plain number, never a
+      -- cron expression - see config.interval/heartbeat_interval, which
+      -- both allow cron and so can't be reused here without breaking the
+      -- retry_interval validation below).
+      retry_interval = context.config.heartbeat_retry_interval,
       run = function() return M._run_heartbeat(context, lifecycle) end,
     })
   end

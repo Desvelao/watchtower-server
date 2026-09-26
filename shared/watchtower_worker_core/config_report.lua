@@ -44,6 +44,7 @@ function M.build_reportable_config(config)
   local report = {
     interval = config.interval,
     heartbeat_interval = config.heartbeat_interval,
+    heartbeat_retry_interval = config.heartbeat_retry_interval,
     version = config.version,
     capabilities = config.capabilities,
     worker_id = config.worker_id,
