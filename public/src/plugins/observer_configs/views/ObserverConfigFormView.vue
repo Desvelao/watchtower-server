@@ -207,7 +207,7 @@ async function runTest() {
   testing.value = true;
   try {
     const res = isEdit.value
-      ? await testObserverConfig(configId.value, { properties: testProperties.value })
+      ? await testObserverConfig(configId.value, { ...buildPayload(), properties: testProperties.value })
       : await testUnregisteredObserverConfig({ ...buildPayload(), properties: testProperties.value });
     testResult.value = res.data ?? null;
     hasTested.value = true;

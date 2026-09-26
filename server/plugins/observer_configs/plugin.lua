@@ -335,8 +335,37 @@ function Plugin.setup(app, deps)
       return { status = 400, json = { message = target_or_err } }
     end
 
+    -- When the caller supplies fields/mechanism_config (the edit form's
+    -- current, possibly-unsaved state), test exactly those - the same
+    -- DB-independent "adhoc" shape the unregistered-config route above
+    -- writes - rather than silently re-testing whatever is still persisted.
+    -- Omitting both keeps today's behavior: test the saved config as-is.
+    local config
+    if self.params.fields ~= nil or self.params.mechanism_config ~= nil then
+      local ok, derived_or_err = derive_observer_config_fields({
+        observable_type_id = item.observable_type_id,
+        fields = self.params.fields,
+        mechanism_config = self.params.mechanism_config,
+      })
+      if not ok then
+        return { status = 400, json = { message = derived_or_err } }
+      end
+      config = {
+        mode = "adhoc",
+        observable_type_id = derived_or_err.observable_type.id,
+        observer_type = derived_or_err.observer_type,
+        name = item.name,
+        fields = derived_or_err.fields,
+        mechanism_config = derived_or_err.mechanism_config,
+        properties = target_or_err.properties,
+        observer_config_id = self.params.id,
+      }
+    else
+      config = { mode = "saved", observer_config_id = self.params.id, properties = target_or_err.properties }
+    end
+
     local request = models.ObserverConfigTestRequests:create({
-      config = jsonb_query.encode({ mode = "saved", observer_config_id = self.params.id, properties = target_or_err.properties }),
+      config = jsonb_query.encode(config),
       test_url = target_or_err.test_url,
     })
 

@@ -647,14 +647,19 @@ CREATE INDEX observer_configs_enabled_idx ON observer_configs (enabled);
 CREATE TABLE observer_config_test_requests (
   id SERIAL PRIMARY KEY,
   -- {mode:"adhoc", observable_type_id, observer_type, name, fields,
-  --  mechanism_config} | {mode:"saved", observer_config_id} |
+  --  mechanism_config, observer_config_id?} | {mode:"saved", observer_config_id} |
   -- {mode:"all", observable_type_id, observer_type} - the observable_type_id
   -- discriminator "all" needs here is required since observer_configs spans
   -- many observable types. `observer_type` is always
   -- lib/observer_type_catalog.lua's M.default() (see
   -- plugins/observer_configs/plugin.lua), never client-supplied - stored
   -- here purely so the worker-side poller doesn't need its own extra
-  -- lookup at execution time.
+  -- lookup at execution time. .../:id/test writes "adhoc" (with
+  -- observer_config_id set, for traceability only - unused by the worker)
+  -- when the request supplies fields/mechanism_config overrides (e.g. the
+  -- edit form's unsaved state), so the test reflects those rather than
+  -- whatever is still persisted; it falls back to "saved" - re-reading the
+  -- config fresh from the DB by id at claim time - when neither is given.
   config JSONB NOT NULL,
   test_url TEXT NOT NULL,
   requested_by INTEGER DEFAULT NULL REFERENCES users(id) ON DELETE SET NULL,
