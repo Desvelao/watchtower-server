@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   server:
-    # image: ghcr.io/desvelao/watchtower-server:v0.1.0
+    # image: ghcr.io/desvelao/watchtower-server:v0.1.0-alpha1
     image: watchtower-server:latest
     container_name: watchtower-server
     ports:
@@ -74,7 +74,7 @@ services:
   # service too). See docs/dev/worker-configuration.md for what
   # config.roles a standalone worker needs (default: {"observer"}).
   worker:
-    # image: ghcr.io/desvelao/watchtower-worker:v0.1.0
+    # image: ghcr.io/desvelao/watchtower-worker:v0.1.0-alpha1
     image: watchtower-worker:latest
     container_name: watchtower-worker
     volumes:
@@ -118,5 +118,3 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
-# akey_a40189b7971de571994be993b97b1580.f56868f838b8704577776437ee1ff1c138a00682719a5f3e730224052cce8681

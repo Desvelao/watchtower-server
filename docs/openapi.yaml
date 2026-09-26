@@ -12,7 +12,7 @@ info:
     CLAUDE.md's "Users & roles" section for the live-enforcement design
     (disabling a user, editing a role, or narrowing an API key's owner's
     permissions takes effect on the very next request, no re-login).
-  version: "1.0.0"
+  version: "0.1.0-alpha1"
 servers:
   - url: http://localhost:8080
     description: Local development server (dev/docker-compose.yml)
