@@ -3,15 +3,15 @@
 -- Every role's tick is a watchtower_worker_core.lifecycle task, built from
 -- the same built-in role plugins (shared/watchtower_worker_core/plugins/)
 -- and whichever observer-type/task plugin(s) config.plugins names (e.g.
--- worker_plugins/watchtower_observer_web_scraper/plugin.lua) - the same
+-- the external observer plugin's plugin.lua) - the same
 -- config.plugins-driven set the standalone worker uses (worker/lua/main.lua),
 -- see watchtower_worker_core.runner's build_config/plugin_loader.lua - only
 -- `context.connector` (this runtime's in-process transport,
 -- `embedded_provider` below - it also implements the worker_manager-based
 -- heartbeat method, the `connection_type` field every connector must
 -- provide, and the observer_configs-backed methods
--- watchtower_observer_web_scraper.plugin builds its own
--- fetch_remote_sites/observer_config_test_poller_deps from) differs from
+-- the external observer plugin builds its own
+-- fetch_remote_targets/observer_config_test_poller_deps from) differs from
 -- the standalone worker's http_provider. Every registered task then runs on
 -- its own concurrent ngx.timer.every (see `every` below) rather than one
 -- shared loop, so a slow role never delays another -
@@ -20,8 +20,8 @@
 --
 -- What's genuinely specific to this runtime lives here: DB-backed ingest of
 -- its own observations, worker registration/heartbeat, and the observer(s) built
--- from plugins/observer_configs (one per enabled (observable_type_id,
--- observer_type) pair) - see build_observer_configs_observers below. An
+-- from plugins/observer_configs (one per enabled observable_type_id) - see
+-- build_observer_configs_observers below. An
 -- observable type with no enabled observer_configs row simply gets no
 -- observer registered (a safe no-op, not an error) until one is configured;
 -- there is no hardcoded fallback for "product" or any other type.
@@ -41,9 +41,10 @@ local notification_senders = require("watchtower_worker_core.notification_sender
 local resty_webhook_transport = require("lib.resty_webhook_transport")
 local resty_mail_notifier = require("lib.resty_mail_notifier")
 local reanalyze = require("plugins.entities.services.reanalyze")
-local observer_type_catalog = require("lib.observer_type_catalog")
 local schedule = require("watchtower_worker_core.schedule")
 local route_helpers = require("lib.routes")
+local wake_events = require("lib.wake_events")
+local wake_keys = require("watchtower_worker_core.wake_keys")
 
 if not ok_config then
   ngx.log(
@@ -367,8 +368,8 @@ local policy_matcher = require("watchtower_worker_core.notification_policy_match
 -- (server/lib/resty_smtp_socket.lua, now removed) tried injecting a
 -- cosocket-based *socket* underneath pling's own SMTP protocol code,
 -- the same DI pattern used for resty_webhook_transport.lua/
--- watchtower_observer_web_scraper's own resty_transport.lua (picked by
--- worker_plugins/watchtower_observer_web_scraper/plugin.lua, based on
+-- the external plugin's own resty_transport.lua (picked by
+-- the external observer plugin's plugin.lua, based on
 -- context.connector.connection_type == "embedded") - that was confirmed broken, since
 -- the yield happens inside pling's
 -- protocol layer itself, not the socket. lua-resty-mail (resty.mail)
@@ -554,8 +555,8 @@ end
 -- connection_type also lives on the connector itself (not a separate
 -- context field) - M._run_heartbeat reads it off
 -- context.connector.connection_type for the heartbeat payload, and
--- watchtower_observer_web_scraper.plugin's build_scraper_transport reads it
--- to pick the outbound scrape-fetch transport.
+-- the external observer plugin's fetch-transport builder reads it
+-- to pick the outbound fetch transport.
 embedded_provider.started_at = WORKER_START_TIME
 embedded_provider.connection_type = "embedded"
 function embedded_provider:heartbeat(fields)
@@ -580,30 +581,34 @@ end
 -- observer_configs/observer_config_test_requests surface provider_http.lua
 -- already exposes to the standalone worker (see that module's own
 -- next_observer_test/observer_test_triggering/observer_test_ack/
--- observer_test_error/get_observer_config/list_observer_config_sites) -
+-- observer_test_error/get_observer_config/list_observer_config_targets) -
 -- direct DB/model access instead of HTTP, but the exact same method names,
--- so watchtower_observer_web_scraper.plugin can build its own
--- fetch_remote_sites/observer_config_test_poller_deps purely from
+-- so the external observer plugin can build its own
+-- fetch_remote_targets/observer_config_test_poller_deps purely from
 -- context.connector on either runtime, with no runtime-specific adapter
 -- module of its own. These tables are schema-generic (no observer_type
--- column - see config/dataset/init.sql's observer_configs comment), so
+-- column - see server/dataset/schema.sql's observer_configs comment), so
 -- exposing them here is no more observer-type-specific than the
 -- claim/report methods above.
-function embedded_provider:list_observer_config_sites(observable_type_id)
-  local catalog_entry = observer_type_catalog.default()
+function embedded_provider:list_observer_config_targets(observable_type_id)
   local rows = models.ObserverConfigs:select(
     "where observable_type_id = ? and enabled = true order by name asc",
     observable_type_id
   )
-  local sites = {}
+  local targets = {}
   for i, row in ipairs(rows) do
-    sites[i] = catalog_entry.to_site(row)
+    targets[i] = {
+      id = row.id,
+      name = row.name,
+      fields = row.fields,
+      mechanism_config = row.mechanism_config,
+    }
   end
-  return sites
+  return targets
 end
 
 -- Embedded counterpart to the standalone worker's
--- GET /api/observer_configs/test_requests/pending - an ad-hoc test has no
+-- PUT /api/observer_configs/test_requests/pending - an ad-hoc test has no
 -- observables/observable_type row for observer_registry to dispatch through,
 -- so this is a direct query rather than going through any observer/observable
 -- machinery. Same atomic-claim shape as that HTTP route (see its own header
@@ -670,20 +675,20 @@ function embedded_provider:observer_test_error(id, message)
 end
 
 -- Not a WORKER_CONFIG_FILE knob for any observer built below - see
--- watchtower_observer_web_scraper.observers.web_scraper's own
--- DEFAULT_REMOTE_SITES_REFRESH_INTERVAL comment for why this is entirely
+-- the external plugin's observer module's own
+-- DEFAULT_REMOTE_TARGETS_REFRESH_INTERVAL comment for why this is entirely
 -- that observer type's own concern. Same "internal implementation detail,
 -- not an operator-facing knob at the role level" precedent as
 -- ENGINE_CACHE_REFRESH_INTERVAL below.
-local REMOTE_SITES_REFRESH_INTERVAL = 60
+local REMOTE_TARGETS_REFRESH_INTERVAL = 60
 
 -- One config.observer.observers[] entry per distinct observable_type_id
 -- that has at least one enabled plugins/observer_configs row - each opts
--- into sites_source="remote" against THAT registry (see
--- watchtower_observer_web_scraper.plugin's fetch_remote_sites, branching on
--- the remote_source="observer_configs" marker set here). observer_type is not
--- configured anywhere (see lib/observer_type_catalog.lua's header comment)
--- - every entry uses the catalog's one implemented type. Real DB I/O - only
+-- into targets_source="remote" against THAT registry (see
+-- the external observer plugin's fetch_remote_targets, branching on
+-- the remote_source="observer_configs" marker set here). The entry carries
+-- no `type`: watchtower_worker_core.lifecycle resolves it to the observer
+-- type the loaded plugin registered. Real DB I/O - only
 -- ever called from inside the boot ngx.timer callback below, never at
 -- module load time.
 local function build_observer_configs_observers()
@@ -693,7 +698,6 @@ local function build_observer_configs_observers()
     WHERE enabled = true
   ]])
 
-  local _, observer_type = observer_type_catalog.default()
   local observers = {}
   for _, row in ipairs(rows) do
     local observable_type = models.ObservableTypes:find({ id = row.observable_type_id })
@@ -701,14 +705,12 @@ local function build_observer_configs_observers()
       worker_logger.warn("observer_configs references missing observable_type_id " .. tostring(row.observable_type_id))
     else
       table.insert(observers, {
-        id = "observer_config_" .. row.observable_type_id .. "_" .. observer_type,
-        type = observer_type,
+        id = "observer_config_" .. row.observable_type_id,
         observable_type = observable_type.name,
-        sites_source = "remote",
+        targets_source = "remote",
         remote_source = "observer_configs",
         observable_type_id = row.observable_type_id,
-        observer_type = observer_type,
-        remote_sites_refresh_interval = REMOTE_SITES_REFRESH_INTERVAL,
+        remote_targets_refresh_interval = REMOTE_TARGETS_REFRESH_INTERVAL,
       })
     end
   end
@@ -723,12 +725,12 @@ end
 -- standalone worker (worker/lua/main.lua) assembles - see
 -- watchtower_worker_core.runner's build_config and plugin_loader.lua.
 -- config.plugins defaults to {}, so WORKER_CONFIG_FILE must list
--- "watchtower_observer_web_scraper.plugin" explicitly for this worker to
+-- "my_observer_plugin.plugin" explicitly for this worker to
 -- have any observer type available at all. This file never touches
 -- watchtower_worker_core.observer_registry, or
--- watchtower_observer_web_scraper's own observer_config_test_poller/
--- observers.web_scraper, directly - that plugin builds everything it needs
--- (including the outbound scrape-fetch transport) from context.connector
+-- the external plugin's own observer_config_test_poller/
+-- observer module, directly - that plugin builds everything it needs
+-- (including the outbound fetch transport) from context.connector
 -- (embedded_provider above) itself, inside its own setup().
 local plugins = require("watchtower_worker_core.plugins")
 for _, plugin in ipairs(require("watchtower_worker_core.plugin_loader").require_configured(config.plugins, worker_logger)) do
@@ -740,8 +742,8 @@ end
 -- module's own header comment for the full contract. Built here (no DB I/O
 -- of its own - every field is either already-constructed above or a
 -- closure), but NOT handed to lifecycle.build yet: that call does real DB
--- I/O (observer_registry construction, via web_scraper's
--- fetch_remote_sites), so it's deferred into the ngx.timer.at(0, ...)
+-- I/O (observer_registry construction, via plugin-provided observer type's
+-- fetch_remote_targets), so it's deferred into the ngx.timer.at(0, ...)
 -- callback below, same as build_observer_registry used to be.
 local context = {
   config = config,
@@ -794,13 +796,13 @@ local function register_worker_with_retries(heartbeat_task, max_attempts, retry_
 end
 
 -- Cache-freshness interval for the module-level rule engine below - not
--- exposed as a WORKER_CONFIG_FILE knob (unlike remote_sites_refresh_
+-- exposed as a WORKER_CONFIG_FILE knob (unlike remote_targets_refresh_
 -- interval) since this is purely an internal implementation detail, not
 -- something an operator needs to tune.
 local ENGINE_CACHE_REFRESH_INTERVAL = 60
 
 -- Builds the Lifecycle (real DB I/O - observer_registry construction, via
--- web_scraper's fetch_remote_sites - so this must run inside a ngx.timer
+-- plugin-provided observer type's fetch_remote_targets - so this must run inside a ngx.timer
 -- callback, not this module's own body/top level), retries worker
 -- registration a few times synchronously, then starts every registered
 -- task on its own concurrent ngx.timer.every (see `every` above) - heartbeat
@@ -824,6 +826,12 @@ local function start_worker()
     -- inside lifecycle.build below, which is still allowed to raise and
     -- abort boot entirely on a genuinely bad observer config (e.g. a
     -- duplicate observable_type mapping).
+    -- server/dataset/schema.sql must exist before the observer_configs
+    -- query below - see bootstrap_admin.lua's identical guard for why this
+    -- idempotent, self-contained call is repeated defensively here rather
+    -- than relied on from elsewhere.
+    require("workers.bootstrap_schema").ensure()
+
     local ok_query, observer_configs_observers = pcall(build_observer_configs_observers)
     if not ok_query then
       worker_logger.error(
@@ -849,6 +857,36 @@ local function start_worker()
 
     for _, task in ipairs(lifecycle:tasks()) do
       every(task.name, task.interval, task.run)
+    end
+
+    -- Cross-process fan-in counterpart to watchtower_worker_core.plugins.events
+    -- (the standalone worker's long-poll task) - see that module's own
+    -- header comment. This worker's own ngx.timer.every ticks all live in
+    -- this one nginx worker process (ngx.worker.id() == 0, guarded below),
+    -- while the route that bumps a wake key (server/lib/wake_events.lua) can
+    -- be served by any of them, so it can't just re-check its own tasks'
+    -- schedules - it has to poll the shared dict, same as the standalone
+    -- worker's HTTP long-poll does server-side, just in-process and much
+    -- more frequently since there's no request to hold open here. Reuses
+    -- lifecycle:tasks_by_role exactly like plugins/events.lua does - zero
+    -- duplicated claim/report logic, only the trigger differs.
+    local wake_keys_to_watch = wake_keys.for_config(config)
+    if #wake_keys_to_watch > 0 then
+      local wake_last_seen = {}
+      every("wake_fan_in", 0.2, function()
+        for _, key in ipairs(wake_keys_to_watch) do
+          local current = wake_events.get(key)
+          if current > (wake_last_seen[key] or 0) then
+            wake_last_seen[key] = current
+            for _, task in ipairs(lifecycle:tasks_by_role(wake_keys.task_role_for(key))) do
+              local ok, err = pcall(task.run)
+              if not ok then
+                worker_logger.warn("wake_fan_in: woken task '" .. task.name .. "' raised: " .. tostring(err))
+              end
+            end
+          end
+        end
+      end)
     end
 
     if has_role(config.roles, "analyzer") then

@@ -75,7 +75,7 @@ here.
   differs.
 - **`watchtower_worker_core.observer_registry`** - *the* seam an external
   repo uses to plug in its own observer type instead of watchtower-server's
-  own web-scraper one. `M.new(observers_config, observer_type_builders,
+  own observer type. `M.new(observers_config, observer_type_builders,
   deps)` builds a `type string -> handler` dispatch table from a plain
   config array (`{id, type, observable_type, ...}`); this module has no
   fixed idea of what an "observer" actually does - only that it implements
@@ -83,7 +83,7 @@ here.
   and, optionally, `:capabilities() -> array of strings`,
   `:reportable_config(observer_config)`, and `:maintenance_tasks() -> array
   of {name, interval, run}` (an instance's own periodic upkeep - e.g. a
-  `sites_source="remote"` web_scraper instance's site-list refresh -
+  `targets_source="remote"` plugin-provided observer instance's target-list refresh -
   aggregated by `registry:maintenance_tasks()` into
   `watchtower_worker_core.lifecycle`'s task list, the per-INSTANCE
   counterpart to a plugin's own per-TYPE `tasks`). An observer type's
@@ -153,7 +153,7 @@ here.
   "What stayed out and why" below): a plain-LuaSocket (`socket.http`/
   `ltn12`) HTTP client implementing the full `deps` surface every
   `pollers/*.lua`/`processors.lua` `do_*` function needs - claim/report per
-  role, `post_observation`, observer-config/site reads,
+  role, `post_observation`, observer-config/target reads,
   `new_enabled_observables_pager`/`new_needs_delivery_alerts_pager`
   keyset-paged cursors, rule/policy reads, alert creation, heartbeats - each
   a thin request-and-unwrap call through its own shared `_call`/
@@ -249,7 +249,7 @@ return M
 require("my_worker.observers.rss_feed")  -- side effect: self-registers "rss_feed"
 
 local observer_registry = require("watchtower_worker_core.observer_registry").new(
-  config.observer.observers,  -- e.g. {{id="feed_scraper", type="rss_feed", observable_type="feed_item"}}
+  config.observer.observers,  -- e.g. {{id="feed_observer", type="rss_feed", observable_type="feed_item"}}
   nil,               -- no explicit override table needed
   { feed_client = my_feed_client }
 )
@@ -271,7 +271,7 @@ itself is built on. A `watchtower_worker_core.lifecycle` plugin registers
 an observer type explicitly instead of self-registering: inside its own
 `setup(context, deps)`, `context.observer_types:register_type("rss_feed",
 M.new)` - see "Writing a new task plugin" below, and
-`worker_plugins/watchtower_observer_web_scraper/plugin.lua` for a real example.
+an external observer-type plugin's `plugin.lua` for a real example.
 
 ## Writing a new task plugin
 
@@ -352,23 +352,21 @@ its input - `analyze` re-processing a `observe` hasn't observed yet, or
 silently produce nothing. The five built-in plugins
 (`shared/watchtower_worker_core/plugins/*.lua`) already set the matching
 constant on their own tasks; a third-party plugin unrelated to the alert
-pipeline (like `watchtower_observer_web_scraper`'s ad-hoc test-poller) can
+pipeline (like an external observer plugin's ad-hoc test-poller) can
 simply leave `phase` unset.
 
 ## What stayed out and why
 
-- **`scraper_creator.lua` / `observers/web_scraper.lua` / `test_poller.lua` /
-  `plugin.lua`** - watchtower-server's own "web_scraper" observer type
-  implementation (plus its ad-hoc "test a scraper config against a URL"
-  poller, and the `watchtower_worker_core.lifecycle` plugin that registers
-  both explicitly, via `context.observer_types`, not self-registration).
-  It's already cleanly pluggable into `observer_registry.new(observers_config,
+- **The external observer-type plugin** (observer builder, observer module,
+  test poller, `plugin.lua`) - an observer type implementation (plus its
+  ad-hoc "test an observer config against a URL" poller, and the
+  `watchtower_worker_core.lifecycle` plugin that registers both explicitly,
+  via `context.observer_types`, not self-registration). It's cleanly
+  pluggable into `observer_registry.new(observers_config,
   observer_type_builders, deps)`/`lifecycle.build(plugins, context)` from
   the outside, so nothing here needed to change for it to keep working -
-  it now lives in its own package, `watchtower_observer_web_scraper`
-  (`worker_plugins/watchtower_observer_web_scraper/`, the
-  `watchtower-observer-web-scraper` rock - see that package's own README),
-  separate from this one, exactly as this section originally anticipated.
+  it lives in its own external package, separate from this one, exactly as
+  this section originally anticipated.
 - **`analyzer.lua`** - watchtower-server's rule-matching/alert-creation logic,
   which talks to Postgres directly with no dependency-injection seam for
   that access. Never used by watchtower-server's own standalone worker either,

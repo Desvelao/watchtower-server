@@ -6,6 +6,7 @@ import { useRolesStore } from "../../../stores/roles";
 import { listUsers } from "../../../services/api/users";
 import { HTTPError } from "../../../services/api/http";
 import ResetPasswordDialog from "../../../components/common/ResetPasswordDialog.vue";
+import PasswordInput from "../../../components/common/PasswordInput.vue";
 
 const props = defineProps({
   id: { type: String, default: null },
@@ -127,12 +128,12 @@ async function onResetPassword(password) {
 
       <div v-if="!isEdit">
         <label for="user-password" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Initial password</label>
-        <input
+        <PasswordInput
           id="user-password"
           v-model="form.password"
-          type="password"
           required
-          class="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
+          wrapper-class="mt-1"
+          class="w-full rounded border border-slate-300 py-2 pl-3 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
         />
       </div>
 

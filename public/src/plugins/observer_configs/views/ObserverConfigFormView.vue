@@ -3,10 +3,13 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useObserverConfigsStore } from '../../../stores/observerConfigs';
 import { useObservableTypesStore } from '../../../stores/observableTypes';
+import { useAuthStore } from '../../../stores/auth';
+import { PERMISSIONS } from '../../../constants/permissions';
 import { getObserverConfig, testObserverConfig, testUnregisteredObserverConfig } from '../../../services/api/observerConfigs';
 import { HTTPError } from '../../../services/api/http';
 import IconFlask from '../../../components/common/icons/IconFlask.vue';
 import ObserverFieldEditor from '../components/ObserverFieldEditor.vue';
+import TestResultPanel from '../components/TestResultPanel.vue';
 import SchemaFieldsForm from '../../../components/common/SchemaFieldsForm.vue';
 import SchemaDrivenForm from '../../../components/common/SchemaDrivenForm.vue';
 
@@ -18,6 +21,7 @@ const route = useRoute();
 const router = useRouter();
 const store = useObserverConfigsStore();
 const observableTypesStore = useObservableTypesStore();
+const auth = useAuthStore();
 
 const configId = computed(() => props.id || route.params.id || null);
 const isEdit = computed(() => !!configId.value);
@@ -313,10 +317,10 @@ async function runTest() {
       </div>
     </form>
 
-    <div v-if="!loading" class="mt-6 rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+    <div v-if="!loading && auth.can(PERMISSIONS.OBSERVER_CONFIGS_CREATE)" class="mt-6 rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
       <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">Test</h2>
       <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-        Run the current field selectors against a real URL. Nothing is saved.
+        Run the current field selectors against a real observable. Nothing is saved.
       </p>
       <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
         Requires at least one connected worker (standalone or embedded) to pick it up - see
@@ -341,7 +345,7 @@ async function runTest() {
       </div>
 
       <p v-if="testError" class="mt-3 text-sm text-red-600 dark:text-red-400">{{ testError }}</p>
-      <pre v-if="hasTested && !testError" class="mt-3 overflow-x-auto rounded bg-slate-50 p-3 text-xs dark:bg-slate-900">{{ JSON.stringify(testResult, null, 2) }}</pre>
+      <TestResultPanel v-if="hasTested && !testError" :result="testResult" class="mt-3" />
     </div>
   </div>
 </template>

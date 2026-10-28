@@ -67,7 +67,11 @@ function Plugin.setup(app, deps)
 
   app:get(
     base_path .. "/:id",
-    compose(require_auth, rbac:with(perms.RULES_READ))(function(self)
+    compose(
+      require_auth,
+      rbac:with(perms.RULES_READ),
+      with_error_handling("Failed to get rule", "Failed to get rule")
+    )(function(self)
       local item = rule_manager:find(self.params.id)
       if not item then
         return { status = 404, json = { message = "Rule not found", id = self.params.id } }
@@ -140,7 +144,11 @@ function Plugin.setup(app, deps)
       if self.params.ids and self.params.ids ~= "" then
         ids = {}
         for id_str in self.params.ids:gmatch("[^,]+") do
-          table.insert(ids, tonumber(id_str))
+          local id = tonumber(id_str)
+          if not id then
+            return { status = 400, json = { message = "ids must be a comma-separated list of numeric ids" } }
+          end
+          table.insert(ids, id)
         end
       end
 

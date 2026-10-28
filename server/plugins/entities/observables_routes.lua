@@ -230,13 +230,27 @@ return function(app, deps, observable_type_manager)
 
   app:delete(
     base_path .. "/:id",
-    compose(require_auth, rbac:with(perms.OBSERVABLES_DELETE))(function(self)
+    compose(
+      require_auth,
+      rbac:with(perms.OBSERVABLES_DELETE),
+      with_error_handling("Failed to delete observable", "Unable to remove observable.")
+    )(function(self)
       local id = self.params.id
       if not id then
         return { status = 400, json = { error = "Missing observable id." } }
       end
 
-      local opr, err = models.Observables:find({ id = id }):delete()
+      local item = models.Observables:find({ id = id })
+      if not item then
+        return { status = 404, json = { message = "Observable not found", id = id } }
+      end
+
+      local ok, opr, err = pcall(function()
+        return item:delete()
+      end)
+      if not ok then
+        return { status = 500, json = { error = opr or "Unable to remove observable." } }
+      end
       if not opr then
         return { status = 500, json = { error = err or "Unable to remove observable." } }
       end
@@ -288,17 +302,32 @@ return function(app, deps, observable_type_manager)
       end
 
       local created, failed = {}, 0
-      for _, row in ipairs(decoded.observables or {}) do
-        local ok_values, normalized_or_err
-
-        local observable_type = row.observable_type_id and observable_type_manager:find(row.observable_type_id)
-        if not observable_type then
-          ok_values, normalized_or_err = false, "Unknown or missing observable_type_id"
-        else
-          ok_values, normalized_or_err = property_schema.validate_values(observable_type.properties, row.properties)
+      local errors = setmetatable({}, cjson.empty_array_mt)
+      local function record_error(index, row, message)
+        failed = failed + 1
+        local entry = { index = index, message = message }
+        if type(row) == "table" and type(row.name) == "string" then
+          entry.name = row.name
         end
+        table.insert(errors, entry)
+      end
 
-        if ok_values then
+      for i, row in ipairs(decoded.observables or {}) do
+        local ok_row, err_row = pcall(function()
+          local ok_values, normalized_or_err
+
+          local observable_type = row.observable_type_id and observable_type_manager:find(row.observable_type_id)
+          if not observable_type then
+            ok_values, normalized_or_err = false, "Unknown or missing observable_type_id"
+          else
+            ok_values, normalized_or_err = property_schema.validate_values(observable_type.properties, row.properties)
+          end
+
+          if not ok_values then
+            record_error(i, row, tostring(normalized_or_err))
+            return
+          end
+
           local ok_create, new_observable = pcall(function()
             return models.Observables:create({
               name = row.name,
@@ -309,15 +338,18 @@ return function(app, deps, observable_type_manager)
           end)
           if ok_create then
             table.insert(created, new_observable)
+          elseif tostring(new_observable):find("duplicate key", 1, true) then
+            record_error(i, row, "An observable with this name already exists")
           else
-            failed = failed + 1
+            record_error(i, row, "Could not be created")
           end
-        else
-          failed = failed + 1
+        end)
+        if not ok_row then
+          record_error(i, row, "Invalid row")
         end
       end
 
-      return { json = { ok = true, content = { observables = created, failed = failed } } }
+      return { json = { ok = true, content = { observables = created, failed = failed, errors = errors } } }
     end)
   )
 end

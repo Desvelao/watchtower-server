@@ -12,7 +12,7 @@
 #
 # ADJUST: image name/tag (see watchtower-worker.service.example's header
 # comment - built from docker/images/prod/worker/Dockerfile, or pulled from
-# ghcr.io/<repo>-worker once published by .github/workflows/docker-publish.yml),
+# ghcr.io/<owner>/watchtower-worker once published by .github/workflows/docker-publish.yml),
 # the worker_config/secrets bind mounts, and the Docker network name if the
 # server/db run under Docker Compose (`docker network ls` to find it - e.g.
 # `dev_default` if run as `cd dev && docker compose up`, per CLAUDE.md).

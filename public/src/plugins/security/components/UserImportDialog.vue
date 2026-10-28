@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue';
 import { preflightUsersImport, commitUsersImport } from '../../../services/api/users';
 import { HTTPError } from '../../../services/api/http';
+import PasswordInput from '../../../components/common/PasswordInput.vue';
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -198,14 +199,14 @@ function onCancel() {
               <option value="create">Import as new</option>
             </select>
 
-            <input
+            <PasswordInput
               v-if="!candidate.error && actions[i] === 'create'"
               v-model="passwords[i]"
-              type="password"
               placeholder="Password"
               autocomplete="new-password"
               :disabled="stage === 'committing'"
-              class="w-full shrink-0 rounded border border-slate-300 px-2 py-1 text-xs sm:w-40 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
+              wrapper-class="w-full shrink-0 sm:w-40"
+              class="w-full rounded border border-slate-300 py-1 pl-2 text-xs dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
             />
           </div>
         </div>

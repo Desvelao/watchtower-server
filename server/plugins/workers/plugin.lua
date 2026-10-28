@@ -10,6 +10,7 @@ local property_schema = require("lib.property_schema")
 local jsonb_query = require("lib.jsonb_query")
 local worker_role_schemas = require("plugins.workers.worker_role_schemas")
 local export_response = require("lib.export_response")
+local wake_events = require("lib.wake_events")
 
 local compose = route_helpers.compose
 local with_json_body = route_helpers.capture_bad_request_params_validate
@@ -26,6 +27,25 @@ local WORKERS_EXPORT_COLUMNS = {
 local WORKER_ROLE_SET = {}
 for _, t in ipairs(worker_role_schemas.WORKER_ROLES) do
   WORKER_ROLE_SET[t] = true
+end
+
+-- The fixed "go poll now" wake-key set GET .../events below accepts - see
+-- lib/wake_events.lua's own header comment. Deliberately not the same set
+-- as WORKER_ROLE_SET above: "observer_test" is a task tag, not a worker
+-- role (see shared/watchtower_worker_core/lifecycle.lua's own "role is
+-- metadata only" header comment), and a role like "scheduler" has no wake
+-- key at all (fire_due is time-driven, not something another route can
+-- create a claimable row for ahead of it).
+local WAKE_KEYS = { observe = true, analyze = true, notify = true, deliver = true, observer_test = true }
+local EVENTS_MAX_WAIT_SECONDS = 25
+local EVENTS_POLL_INTERVAL_SECONDS = 0.2
+
+local function parse_csv(value)
+  local list = {}
+  for item in tostring(value or ""):gmatch("[^,]+") do
+    table.insert(list, item)
+  end
+  return list
 end
 
 -- Validates every element of `worker_roles` is a known role, then returns
@@ -157,6 +177,70 @@ function Plugin.setup(app, deps)
       })
 
       return { status = 202, json = { message = "Heartbeat recorded", item = item } }
+    end)
+  )
+
+  -- Worker-facing long-poll: holds the request open (server-side, via
+  -- ngx.sleep - OpenResty request handlers are coroutines, so this yields
+  -- rather than blocking other requests) until any of `keys` has moved past
+  -- what the caller already knows (`since`), or up to EVENTS_MAX_WAIT_SECONDS
+  -- elapses with nothing new (204). This never evaluates or decides
+  -- anything - it only ever reads counters some other route already bumped
+  -- (see lib/wake_events.lua) - the caller still claims through its own
+  -- existing endpoint (PUT .../test_requests/pending, PUT
+  -- /api/scheduler/claim, PUT /api/alert_deliveries/claim); this only
+  -- shortens how long it waits before trying. WORKERS_WRITE, same as
+  -- .../heartbeat above - the caller's identity claim is what matters here,
+  -- not a distinct capability.
+  app:get(
+    base_path .. "/:id/events",
+    compose(
+      require_auth,
+      rbac:with(perms.WORKERS_WRITE),
+      with_error_handling("Failed to long-poll worker events", "Failed to long-poll worker events")
+    )(function(self)
+      local keys = parse_csv(self.params.keys)
+      if #keys == 0 then
+        return { status = 400, json = { message = "keys is required" } }
+      end
+      for _, key in ipairs(keys) do
+        if not WAKE_KEYS[key] then
+          return { status = 400, json = { message = "unknown wake key: " .. tostring(key) } }
+        end
+      end
+
+      local since = {}
+      for _, pair in ipairs(parse_csv(self.params.since)) do
+        local key, seq = pair:match("^([^:]+):(%d+)$")
+        if key then
+          since[key] = tonumber(seq)
+        end
+      end
+
+      local requested_wait = tonumber(self.params.wait)
+      if requested_wait == nil or requested_wait ~= requested_wait then
+        requested_wait = EVENTS_MAX_WAIT_SECONDS
+      end
+      local wait_seconds = math.max(0, math.min(requested_wait, EVENTS_MAX_WAIT_SECONDS))
+      local elapsed = 0
+
+      -- Check first, then decide whether to keep waiting, so wait=0 is a
+      -- non-blocking single check.
+      while true do
+        for _, key in ipairs(keys) do
+          local current = wake_events.get(key)
+          if current > (since[key] or 0) then
+            return { status = 200, json = { key = key, seq = current } }
+          end
+        end
+        if elapsed >= wait_seconds then
+          break
+        end
+        ngx.sleep(EVENTS_POLL_INTERVAL_SECONDS)
+        elapsed = elapsed + EVENTS_POLL_INTERVAL_SECONDS
+      end
+
+      return { status = 204 }
     end)
   )
 

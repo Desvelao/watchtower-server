@@ -8,7 +8,7 @@
 -- attempt, server/lib/resty_smtp_socket.lua, tried working around this by
 -- injecting a cosocket-based *socket* underneath pling's own SMTP
 -- protocol code (mirroring how resty_webhook_transport.lua/
--- watchtower_observer_web_scraper's own resty_transport.lua inject a
+-- the external plugin's own resty_transport.lua inject a
 -- cosocket transport under other LuaSocket-based code) - that was
 -- confirmed broken during testing,
 -- because the problem is in pling's protocol layer itself (the

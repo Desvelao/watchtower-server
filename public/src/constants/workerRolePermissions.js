@@ -6,7 +6,7 @@
 // e.g. POST /api/alert_deliveries needs DELIVERIES_CREATE+DELIVERIES_UPDATE,
 // not WORKERS_WRITE as an older doc pass claimed). Permissive on purpose:
 // each set covers that role's default ("queue") mode plus its optional
-// interval-mode/remote-sites reads, so a generated key keeps working if the
+// interval-mode/remote-targets reads, so a generated key keeps working if the
 // worker's config later switches modes.
 //
 // This is purely a frontend UI convenience for pre-filling the API key

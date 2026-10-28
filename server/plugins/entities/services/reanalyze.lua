@@ -28,7 +28,7 @@ local M = {}
 -- M:_create_alert).
 function M.analyze_observable(observable, observable_type, observations_model, analyzer)
   -- observations has no created_at column - `timestamp` is the column that
-  -- records when the observation was taken (see config/dataset/init.sql).
+  -- records when the observation was taken (see server/dataset/schema.sql).
   local latest = observations_model:select(
     "where observable_id = ? order by timestamp desc limit 1", observable.id
   )[1]

@@ -84,7 +84,7 @@ function M.new(config)
   return instance
 end
 
-function M:_request(method, path, body, headers)
+function M:_request(method, path, body, headers, timeout)
   local log_id = string.format("[%s %s]", method:upper(), path)
   local req_body = body and type(body) == "table" and cjson_safe.encode(body)
     or nil
@@ -110,7 +110,7 @@ function M:_request(method, path, body, headers)
       source = req_body and ltn12.source.string(req_body) or nil,
       sink = ltn12.sink.table(resp_body),
       headers = req_headers,
-      timeout = 10,
+      timeout = timeout or 10,
     })
   end)
 
@@ -164,7 +164,7 @@ function M:_request(method, path, body, headers)
   return decoded_body, nil
 end
 
-function M:_request_with_auth(method, path, body, headers)
+function M:_request_with_auth(method, path, body, headers, timeout)
   local valid, verr = self:validate()
   if not valid then
     return nil, verr
@@ -178,7 +178,7 @@ function M:_request_with_auth(method, path, body, headers)
     _headers[k] = v
   end
 
-  return self:_request(method, path, body, _headers)
+  return self:_request(method, path, body, _headers, timeout)
 end
 
 -- Authenticated request + response unwrapping + error decoration - the one
@@ -235,6 +235,10 @@ end
 -- simplification on both workers), so a sweep just paginates through every
 -- matching row on each full pass.
 function M:_fetch_page(context, path, params, what)
+  local valid, verr = self:validate()
+  if not valid then
+    return nil, "fetch " .. what .. " failed: " .. tostring(verr)
+  end
   local page_params = { from = context.from, size = self.config.server.batch_size }
   for key, value in pairs(params or {}) do
     page_params[key] = value
@@ -312,7 +316,7 @@ function M:get_observable_type(id)
   })
 end
 
--- watchtower_observer_web_scraper.observer_config_test_poller's `deps` for
+-- the external plugin's observer_config_test_poller's `deps` for
 -- the standalone worker's async test flow (type='observer_test') - see
 -- worker/lua/main.lua. `worker_id` is required now: the server claims the
 -- candidate atomically (inserting its own 'triggering' jobs row) as part of
@@ -320,7 +324,7 @@ end
 -- separate PUT to claim later (see server/plugins/observer_configs/
 -- plugin.lua's own header comment on this route for why).
 function M:next_observer_test()
-  return self:_call("GET", "/api/observer_configs/test_requests/pending" .. query_string({ worker_id = self.config.worker_id }), {
+  return self:_call("PUT", "/api/observer_configs/test_requests/pending" .. query_string({ worker_id = self.config.worker_id }), {
     unwrap = "item",
     err = "failed to fetch pending observer config test",
   })
@@ -355,19 +359,15 @@ function M:get_observer_config(id)
   return row, nil
 end
 
--- Already pre-reshaped to scraper_creator.new's `sites` entry shape by the
--- server (see server/plugins/observer_configs/plugin.lua's GET .../site) -
--- no further reshaping needed client-side.
--- observer_type isn't configured anywhere (see
--- server/lib/observer_type_catalog.lua's header comment - exactly one
--- observer type is implemented, so the server always resolves that one),
--- so this only ever needs to name the observable_type_id.
-function M:list_observer_config_sites(observable_type_id)
-  return self:_call("GET", "/api/observer_configs/site" .. query_string({
+-- Returns generic {id, name, fields, mechanism_config} rows (see
+-- server/plugins/observer_configs/plugin.lua's GET .../targets); the
+-- observer plugin reshapes them into its own target shape client-side.
+function M:list_observer_config_targets(observable_type_id)
+  return self:_call("GET", "/api/observer_configs/targets" .. query_string({
     observable_type_id = observable_type_id,
   }), {
     unwrap = "items",
-    err = "failed to fetch observer config sites",
+    err = "failed to fetch observer config targets",
   })
 end
 
@@ -792,6 +792,40 @@ end
 -- partly completed.
 function M:evaluate_notify_policies(policy_ids)
   return self:_get_policy_matcher():evaluate_and_enqueue(policy_ids)
+end
+
+-- The "events" plugin's long-poll (watchtower_worker_core.plugins.events) -
+-- GET /api/workers/:id/events, held open server-side up to `wait_seconds`
+-- (see server/plugins/workers/plugin.lua). Uses a longer socket timeout than
+-- every other call here (`wait_seconds` plus a fixed margin): the server is
+-- deliberately holding the response open, not slow, so M:_request's plain
+-- 10s default would spuriously time out every long-poll that outlasts it.
+-- `since` is a plain {key -> last-seen seq} table, mutated by nothing here
+-- (the caller updates it from the returned seq) - keeps this a pure
+-- request/response call like every other method above.
+-- Returns (key, seq, nil) on a wake, (nil, nil, nil) on a 204 (nothing
+-- became due within wait_seconds - a string response with no `.key`/`.seq`
+-- fields decodes the same way, so no separate 204 branch is needed), or
+-- (nil, nil, err) on failure.
+local TIMEOUT_MARGIN_SECONDS = 5
+
+function M:poll_events(keys, since, wait_seconds)
+  local since_parts = {}
+  for _, key in ipairs(keys) do
+    table.insert(since_parts, key .. ":" .. tostring(since[key] or 0))
+  end
+
+  local uri = "/api/workers/" .. tostring(self.config.worker_id) .. "/events" .. query_string({
+    keys = table.concat(keys, ","),
+    since = table.concat(since_parts, ","),
+    wait = wait_seconds,
+  })
+
+  local response, err = self:_request_with_auth("GET", uri, nil, nil, wait_seconds + TIMEOUT_MARGIN_SECONDS)
+  if not response then
+    return nil, nil, err
+  end
+  return response.key, response.seq, nil
 end
 
 function M:heartbeat(fields)

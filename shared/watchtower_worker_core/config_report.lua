@@ -16,7 +16,7 @@
 -- observer by registry:reportable_observers() (falling back to a generic,
 -- minimal allow-list for a type that doesn't implement it). This module has
 -- no fixed idea of what fields any particular observer type's config
--- carries (e.g. web_scraper's `sites_source`/`url_property`/`sites` are
+-- carries (e.g. plugin-provided observer type's `targets_source`/`url_property`/`targets` are
 -- that observer type's own concern) and no self-registration table of its
 -- own - apply_registry below just publishes whatever the registry already
 -- computed onto `config`.
@@ -72,7 +72,7 @@ end
 -- config.report_config is set, each observer's own reportable-config subset
 -- (registry:reportable_observers(), see observer_registry.lua) plus the
 -- full config dump derived from them - which embeds both, so they must be
--- rebuilt every time the registry is, or a remote-sites refresh leaves the
+-- rebuilt every time the registry is, or a remote-targets refresh leaves the
 -- reported config stale. The single place both worker runtimes do this, at
 -- startup and on every refresh.
 function M.apply_registry(config, registry)

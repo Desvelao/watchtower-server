@@ -10,7 +10,7 @@ services:
       # Optional: third-party worker plugin modules - referenced by module
       # path in WORKER_CONFIG_FILE's `plugins` field. Leave the host
       # directory empty/absent if you have none; the image's own /shared
-      # (watchtower_observer_web_scraper.plugin included) still works either
+      # (external observer plugins included) still works either
       # way. The image's own baked-in LUA_PATH (see
       # docker/images/prod/server/Dockerfile) already resolves this mount -
       # no environment override needed here.
@@ -72,32 +72,32 @@ services:
   # the API server) or instead of it (set USE_EMBED_WORKER=0 on the server
   # service too). See docs/dev/worker-configuration.md for what
   # config.roles a standalone worker needs (default: {"observer"}).
-  worker:
-    image: ghcr.io/desvelao/watchtower-worker:0.1.0-alpha1
-    container_name: watchtower-worker
-    volumes:
-      - ${WORKER_CONFIG_DIR:-./worker_config}:/etc/watchtower
-      # Optional: third-party worker plugin modules - see the server
-      # service's own worker_plugins mount above (same mechanism, same
-      # WORKER_PLUGINS_DIR variable, same image-baked LUA_PATH default).
-      - ${WORKER_PLUGINS_DIR:-./worker_plugins}:/worker_plugins
-    environment:
-      # A real API key created via POST /api/auth/api_key for a
-      # user/role with the permissions this worker's config.roles needs -
-      # see docs/dev/worker-configuration.md. SERVER_API_KEY_FILE (a
-      # Docker secret) is also supported in place of this, same
-      # precedence chain the embedded worker uses.
-      SERVER_API_KEY: ${SERVER_API_KEY}
-      WORKER_CONFIG_FILE: ${WORKER_CONFIG_FILE:-/etc/watchtower/worker_config.lua}
-      SMTP_HOST: ${SMTP_HOST:-}
-      SMTP_PORT: ${SMTP_PORT:-465}
-      SMTP_USER: ${SMTP_USER:-}
-      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      SMTP_FROM: ${SMTP_FROM:-}
-      SMTP_SSL: ${SMTP_SSL:-1}
-    depends_on:
-      db:
-        condition: service_healthy
+  # worker:
+  #   image: ghcr.io/desvelao/watchtower-worker:0.1.0-alpha1
+  #   container_name: watchtower-worker
+  #   volumes:
+  #     - ${WORKER_CONFIG_DIR:-./worker_config}:/etc/watchtower
+  #     # Optional: third-party worker plugin modules - see the server
+  #     # service's own worker_plugins mount above (same mechanism, same
+  #     # WORKER_PLUGINS_DIR variable, same image-baked LUA_PATH default).
+  #     - ${WORKER_PLUGINS_DIR:-./worker_plugins}:/worker_plugins
+  #   environment:
+  #     # A real API key created via POST /api/auth/api_key for a
+  #     # user/role with the permissions this worker's config.roles needs -
+  #     # see docs/dev/worker-configuration.md. SERVER_API_KEY_FILE (a
+  #     # Docker secret) is also supported in place of this, same
+  #     # precedence chain the embedded worker uses.
+  #     SERVER_API_KEY: ${SERVER_API_KEY}
+  #     WORKER_CONFIG_FILE: ${WORKER_CONFIG_FILE:-/etc/watchtower/worker_config.lua}
+  #     SMTP_HOST: ${SMTP_HOST:-}
+  #     SMTP_PORT: ${SMTP_PORT:-465}
+  #     SMTP_USER: ${SMTP_USER:-}
+  #     SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  #     SMTP_FROM: ${SMTP_FROM:-}
+  #     SMTP_SSL: ${SMTP_SSL:-1}
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
 
   db:
     image: postgres:14
@@ -110,7 +110,6 @@ services:
       - "5432:5432" # Expose PostgreSQL on port 5432
     volumes:
       - ./postgres:/var/lib/postgresql/data
-      - "../config/dataset:/docker-entrypoint-initdb.d"
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]
       interval: 10s

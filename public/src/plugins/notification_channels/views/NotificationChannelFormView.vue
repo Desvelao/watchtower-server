@@ -150,6 +150,7 @@ async function onSubmit() {
         <select
           id="channel-type"
           v-model="form.type"
+          :disabled="isEdit"
           class="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
         >
           <option value="discord">discord</option>

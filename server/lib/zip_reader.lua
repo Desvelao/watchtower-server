@@ -61,8 +61,12 @@ local function inflate_raw(data, expected_size)
     return nil, "inflateInit2_ failed: " .. ret
   end
 
-  local input = ffi.new("unsigned char[?]", #data, data)
-  strm.next_in = input
+  -- Point next_in straight at the Lua string (kept alive by `data`, and
+  -- zlib never writes through next_in). Do NOT copy it into an
+  -- `ffi.new("unsigned char[?]", #data, data)` buffer: LuaJIT copies the
+  -- string's trailing NUL too, writing 1 byte past a buffer sized exactly
+  -- #data, which corrupts the heap and crashes a later GC / unrelated read().
+  strm.next_in = data
   strm.avail_in = #data
 
   local out_size = expected_size + 64

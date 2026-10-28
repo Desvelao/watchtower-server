@@ -5,11 +5,10 @@
 -- list or the field-definition validator itself:
 --   - required_field_names is derived by the caller from the target
 --     observable_type's own observer_config_schema (authored on
---     observable_types, see config/dataset/init.sql), not a module-level
+--     observable_types, see server/dataset/schema.sql), not a module-level
 --     constant - a "product" required list would say nothing about a
 --     future "widget" type.
---   - field_def_validator lets a future observer_type (see
---     lib/observer_type_catalog.lua) supply its own field-entry shape
+--   - field_def_validator lets a caller supply its own field-entry shape
 --     without changing this module.
 local M = {}
 

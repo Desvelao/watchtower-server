@@ -76,7 +76,11 @@ function Plugin.setup(app, deps)
 
   app:get(
     base_path .. "/:id",
-    compose(require_auth, rbac:with(perms.SCHEDULER_READ))(function(self)
+    compose(
+      require_auth,
+      rbac:with(perms.SCHEDULER_READ),
+      with_error_handling("Failed to get scheduler task", "Failed to get scheduler task")
+    )(function(self)
       local item = search_manager:find(self.params.id)
       if not item then
         return { status = 404, json = { message = "Scheduler task not found", id = self.params.id } }
@@ -158,8 +162,12 @@ function Plugin.setup(app, deps)
   -- expression this table has no equivalent of).
   app:get(
     base_path .. "/export",
-    compose(require_auth, rbac:with(perms.SCHEDULER_READ))(function(self)
-      local items = models.SchedulerTasks:select()
+    compose(
+      require_auth,
+      rbac:with(perms.SCHEDULER_READ),
+      with_error_handling("Failed to export scheduler tasks", "Failed to export scheduler tasks")
+    )(function(self)
+      local items =models.SchedulerTasks:select()
       local filename = "scheduler_tasks_export_" .. os.date("%Y-%m-%d") .. ".json"
       return {
         status = 200,
@@ -181,8 +189,12 @@ function Plugin.setup(app, deps)
   -- One failing row is counted in `failed` rather than aborting the batch.
   app:post(
     base_path .. "/import",
-    compose(require_auth, rbac:with(perms.SCHEDULER_CREATE))(function(self)
-      local file = self.params.file
+    compose(
+      require_auth,
+      rbac:with(perms.SCHEDULER_CREATE),
+      with_error_handling("Failed to import scheduler tasks", "Failed to import scheduler tasks")
+    )(function(self)
+      local file =self.params.file
       if not file then
         return { status = 400, json = { message = "File is missing." } }
       end

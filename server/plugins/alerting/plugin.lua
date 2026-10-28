@@ -8,7 +8,7 @@
 -- shared/watchtower_worker_core/worker_rule_matcher.lua, the standalone
 -- worker's own client-side rule-matching path (shared/watchtower_worker_core/provider_http.lua's
 -- M:create_alert), gated on its own alerts:create permission, separate from
--- alerts:read/update/delete (the seeded admin/operator roles have it).
+-- alerts:read/delete (the seeded admin/operator roles have it).
 local models = require("models")
 local route_helpers = require("lib.routes")
 local alert_queries = require("lib.alert_queries")
@@ -124,7 +124,6 @@ function Plugin.setup(app, deps)
     },
     search_param = "search",
     updated_at_param = "updated_at",
-    remove_fields_on_update = { "severity_value" },
     select_fields = "*, "
       .. "(select observables.name from observations join observables on observables.id = observations.observable_id "
       .. "where observations.id = alerts.observation_id) as source, "
@@ -135,7 +134,7 @@ function Plugin.setup(app, deps)
       .. "(select name from rules where rules.id = alerts.rule_id) as rule_name, "
       -- Delivery status is per-channel, not a scalar - see
       -- server/models/alert_deliveries.lua and its table comment in
-      -- config/dataset/init.sql for why this lives in a sibling table
+      -- server/dataset/schema.sql for why this lives in a sibling table
       -- rather than as columns on alerts itself.
       .. "(select json_agg(json_build_object('channel_id', ad.channel_id, 'notified_at', ad.notified_at, "
       .. "'status', ad.status)) from alert_deliveries ad where ad.alert_id = alerts.id) as deliveries",
@@ -184,6 +183,7 @@ function Plugin.setup(app, deps)
         { "observation_id", types.db_id },
         { "severity", types.empty + types.valid_text },
         { "rule_id", types.empty + types.db_id },
+        { "tags", types.empty + types.array_of(types.valid_text) },
       }),
       with_error_handling("Failed to create alert", "Failed to create alert")
     )(function(self)
@@ -206,7 +206,7 @@ function Plugin.setup(app, deps)
       end)
 
       if not ok then
-        -- alerts_rule_id_observation_id_idx (config/dataset/init.sql) is the
+        -- alerts_rule_id_observation_id_idx (server/dataset/schema.sql) is the
         -- DB-level backstop for the same "one alert per rule per
         -- observation" invariant the caller's own has_alert_for_observation
         -- pre-check already enforces (shared/watchtower_worker_core/
@@ -225,7 +225,11 @@ function Plugin.setup(app, deps)
 
   app:get(
     base_path .. "/:id",
-    compose(require_auth, rbac:with(perms.ALERTS_READ))(function(self)
+    compose(
+      require_auth,
+      rbac:with(perms.ALERTS_READ),
+      with_error_handling("Failed to get alert", "Failed to get alert")
+    )(function(self)
       local item = alert_manager:find(self.params.id)
       if not item then
         return { status = 404, json = { message = "Alert not found", id = self.params.id } }

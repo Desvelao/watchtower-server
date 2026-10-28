@@ -1,9 +1,9 @@
--- Heartbeat and the ad-hoc scraper-test poller both moved out of this
+-- Heartbeat and the ad-hoc observer-config test poller both moved out of this
 -- module: heartbeat is now watchtower_worker_core.lifecycle's own
 -- M._run_heartbeat (kernel-intrinsic, scheduled directly by
 -- lifecycle.build, not a per-role task), and the test poller is now the
--- watchtower_observer_web_scraper plugin's own task (see that package's
--- plugin.lua) - it's specific to the web_scraper observer type, not
+-- the external observer plugin's own task (see that package's
+-- plugin.lua) - it's specific to the plugin-provided observer type, not
 -- generic worker-core behavior.
 
 -- Best-effort scheduler tick - the embedded worker instead runs this via
@@ -63,7 +63,7 @@ end
 -- shared/watchtower_worker_core/observable_type_cache.lua instance) and dispatches the actual observe
 -- through ctx.observer_registry (shared/watchtower_worker_core/observer_registry.lua), which routes
 -- by observable-type name to whatever observer implementation is configured
--- for it (e.g. watchtower_observer_web_scraper.observers.web_scraper). Returns (status, message,
+-- for it (e.g. the external plugin's observer module). Returns (status, message,
 -- properties) - status is "observed" (properties populated) or "error"
 -- (message populated). Shared by process_observable below (the ordinary
 -- observer.source="interval" flow) and shared/watchtower_worker_core/pollers/observe.lua (a
@@ -155,7 +155,7 @@ end
 -- deps.post_observation ultimately posts to /api/observations, whose
 -- `worker` column is also an FK to `workers` - either write can fail before
 -- the server has ever seen this worker. Returning true (a no-op success)
--- rather than claiming and losing the batch's scrape work to a doomed
+-- rather than claiming and losing the batch's observe work to a doomed
 -- post_observation lets the loop simply retry at the next normal
 -- interval, exactly like the interval path.
 local function do_run_pending_observe_batch(ctx, http_provider, utils)
@@ -203,7 +203,7 @@ end
 -- :analyze_observable(observable) per observable. Re-running rule matching has no
 -- per-observable jobs row to report, so a plain loop with a log-only
 -- summary is enough. Unlike observer.source = "interval" (which processes
--- one observable per run, since it's observing a live external site), this
+-- one observable per run, since it's observing a live external resource), this
 -- does a complete pass every call - analyze only re-runs rule matching
 -- against already-stored rows, which is cheap, idempotent, and has no
 -- external rate limit to respect.
@@ -266,10 +266,16 @@ local function do_run_pending_evaluate_batch(ctx, http_provider, utils)
   if not ctx._worker_registered then
     return true
   end
-  local deps = batch_transport(http_provider, "notify", "evaluated", function(result)
-    ctx._deliveries_enqueued_total = (ctx._deliveries_enqueued_total or 0) + (result.enqueued or 0)
-  end)
-  deps.evaluate = function(policy_ids) return http_provider:evaluate_notify_policies(policy_ids) end
+  local deps = batch_transport(http_provider, "notify", "evaluated")
+  -- Counted here, not on the report: a partial pass (complete == false) is
+  -- reported as an error, but the deliveries it did enqueue are real.
+  deps.evaluate = function(policy_ids)
+    local outcome, complete = http_provider:evaluate_notify_policies(policy_ids)
+    if type(outcome) == "table" then
+      ctx._deliveries_enqueued_total = (ctx._deliveries_enqueued_total or 0) + (outcome.enqueued or 0)
+    end
+    return outcome, complete
+  end
   return run_claim_poller("do_run_pending_evaluate_batch", "watchtower_worker_core.pollers.evaluate", deps, utils)
 end
 

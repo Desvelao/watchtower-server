@@ -4,6 +4,7 @@ import { useObservableTypesStore } from '../../../stores/observableTypes';
 import { testAllObserverConfigs } from '../../../services/api/observerConfigs';
 import { HTTPError } from '../../../services/api/http';
 import SchemaDrivenForm from '../../../components/common/SchemaDrivenForm.vue';
+import TestResultPanel from '../components/TestResultPanel.vue';
 
 const observableTypesStore = useObservableTypesStore();
 
@@ -104,6 +105,6 @@ async function onSubmit() {
       </div>
     </form>
 
-    <pre v-if="hasTested && !error" class="mt-6 overflow-x-auto rounded-lg border border-slate-200 bg-slate-50 p-4 text-xs dark:border-slate-700 dark:bg-slate-900">{{ JSON.stringify(result, null, 2) }}</pre>
+    <TestResultPanel v-if="hasTested && !error" :result="result" class="mt-6" />
   </div>
 </template>

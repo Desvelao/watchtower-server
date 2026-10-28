@@ -1,7 +1,7 @@
 local Model = require("lapis.db.model").Model
 
 -- Per-(alert, channel) durable delivery queue for the notify pipeline - see
--- this table's own header comment in config/dataset/init.sql,
+-- this table's own header comment in server/dataset/schema.sql,
 -- shared/watchtower_worker_core/notification_policy_matcher.lua (the
 -- "evaluator" role, which enqueues), and
 -- plugins/notification_channels/services/delivery_queue.lua (the

@@ -98,10 +98,16 @@ local function get_db_where_clause_from_request_params(request, where_params)
                     clause = key .. ' ' .. operator .. ' ' .. db.escape_literal(value)
                 end
 
-                if #where_clause > 0 then
-                    where_clause = where_clause..' and '
+                -- Each fragment is parenthesized so a fragment containing a top-level
+                -- `or` (e.g. a multi-column search) stays one conjunct: `and` binds
+                -- tighter than `or`. Blank fragments (e.g. a search over zero
+                -- columns) are skipped rather than emitting `()` or a dangling `and`.
+                if clause ~= nil and clause:match('%S') then
+                    if #where_clause > 0 then
+                        where_clause = where_clause..' and '
+                    end
+                    where_clause = where_clause..' (' .. clause .. ')'
                 end
-                where_clause = where_clause..' ' .. clause
             end
         end
     end
@@ -141,29 +147,40 @@ local function get_db_query_params_from_request_params(request, where_params)
     end
 
     if request_params.sort then
-        local sort_clauses = str_split(request_params.sort, ',')
-        result = result..' order by'
-        for i, v in ipairs(sort_clauses) do
-            if(i > 1) then
-                result = result .. ','
+        -- blank clauses ("", " ", ",", ",,") are dropped so an empty `sort`
+        -- behaves like no sort instead of leaving a bare trailing `order by`.
+        local sort_clauses = {}
+        for _, clause in ipairs(str_split(request_params.sort, ',')) do
+            local trimmed = clause:match('^%s*(.-)%s*$')
+            if #trimmed > 0 then
+                table.insert(sort_clauses, trimmed)
             end
-            local c = str_split(v, ':')
-            local key, order = c[1], c[2]
+        end
 
-            -- key/order come straight from the request's `sort` param; only
-            -- a bare identifier and asc/desc are allowed here since this is
-            -- concatenated directly into the query (db.escape_literal only
-            -- escapes string values, not identifiers/keywords).
-            if not key or not key:match('^[%a_][%w_]*$') then
-                error('Invalid sort key: ' .. tostring(key))
+        if #sort_clauses > 0 then
+            result = result..' order by'
+            for i, v in ipairs(sort_clauses) do
+                if(i > 1) then
+                    result = result .. ','
+                end
+                local c = str_split(v, ':')
+                local key, order = c[1], c[2]
+
+                -- key/order come straight from the request's `sort` param; only
+                -- a bare identifier and asc/desc are allowed here since this is
+                -- concatenated directly into the query (db.escape_literal only
+                -- escapes string values, not identifiers/keywords).
+                if not key or not key:match('^[%a_][%w_]*$') then
+                    error('Invalid sort key: ' .. tostring(key))
+                end
+
+                order = order and order:lower() or 'asc'
+                if order ~= 'asc' and order ~= 'desc' then
+                    error('Invalid sort order: ' .. tostring(order))
+                end
+
+                result = result .. ' ' .. key .. ' ' .. order
             end
-
-            order = order and order:lower() or 'asc'
-            if order ~= 'asc' and order ~= 'desc' then
-                error('Invalid sort order: ' .. tostring(order))
-            end
-
-            result = result .. ' ' .. key .. ' ' .. order
         end
     end
 

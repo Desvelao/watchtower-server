@@ -81,11 +81,11 @@ end
 
 -- Every other worker setting lives in WORKER_CONFIG_FILE (a .lua file -
 -- see config_provider_file.lua). This loads that file once and builds the
--- whole config from it - connectivity/timing fields below, plus `sites`
--- (untouched here, just passed through for scraper_creator.lua to read
+-- whole config from it - connectivity/timing fields below, plus `targets`
+-- (untouched here, just passed through for the plugin's observer builder to read
 -- directly, so the file is only ever loaded from this one place).
 -- config_provider.lua/config_provider_file.lua are generic file-loading
--- utilities, not part of scraper_creator.lua - only this worker-app layer
+-- utilities, not part of the plugin's observer builder - only this worker-app layer
 -- knows about WORKER_CONFIG_FILE at all.
 --
 -- Every setting specific to one worker role lives namespaced under
@@ -129,7 +129,7 @@ function M.build_config(mode, env)
   -- (watchtower_worker_core.provider_http/.lifecycle) - see logger.lua's own
   -- header comment for why this module no longer resolves it via os.getenv
   -- itself.
-  config.log_level = env.LOG_LEVEL
+  config.log_level = nonempty(env.LOG_LEVEL) or file_config.log_level
 
   if mode == "standalone" then
     if file_config.server then
@@ -206,14 +206,14 @@ function M.build_config(mode, env)
     )
   end
 
-  -- Array of Lua module path strings (e.g. "watchtower_observer_web_scraper.plugin"),
+  -- Array of Lua module path strings (e.g. "my_observer_plugin.plugin"),
   -- each require()d by plugin_loader.require_configured and appended to
   -- watchtower_worker_core.plugins' five built-ins before lifecycle.build runs -
   -- see worker/lua/main.lua/server/workers/observe_pending_worker.lua. Applies to
   -- both modes identically, same as config.observer/config.scheduler below.
   -- Defaults to {} - nothing beyond the five built-in role plugins is loaded
   -- unless named here, so an operator wanting to observe products must list
-  -- watchtower_observer_web_scraper.plugin explicitly (it is no longer
+  -- the external observer plugin explicitly (it is no longer
   -- unconditional).
   config.plugins = file_config.plugins or {}
 
@@ -273,14 +273,14 @@ function M.build_config(mode, env)
     -- Any other value falls back to "queue" - same "prefer the new default"
     -- treatment as an absent field.
     source = file_observer.source == "interval" and "interval" or "queue",
-    -- Array of {id, type, observable_type, url_property?, sites_source?,
-    -- remote_sites_refresh_interval?, ...type-specific fields} - standalone
+    -- Array of {id, type, observable_type, url_property?, targets_source?,
+    -- remote_targets_refresh_interval?, ...type-specific fields} - standalone
     -- only (the embedded worker's one observer is hardcoded inline instead,
     -- see server/workers/observe_pending_worker.lua's
     -- build_observer_registry, which never reads this array). Each entry's
-    -- own sites_source/remote_sites_refresh_interval is read directly by
-    -- that observer type's own module (e.g. watchtower_observer_web_scraper.observers.web_scraper),
-    -- which re-fetches its own remote site list as part of its own :run,
+    -- own targets_source/remote_targets_refresh_interval is read directly by
+    -- that observer type's own module (e.g. the external plugin's observer module),
+    -- which re-fetches its own remote target list as part of its own :run,
     -- on its own cadence - this file has no involvement in that at all,
     -- and just passes the array through unexamined.
     observers = file_observer.observers,
@@ -290,8 +290,8 @@ function M.build_config(mode, env)
     -- config.plugins can register: the main observe task itself (built-in
     -- watchtower_worker_core.plugins.observer, gated on top of the existing
     -- has_role(roles, "observer") check) and, in test_poll below, the
-    -- ad-hoc "test this scraper config against a URL" poller
-    -- (worker_plugins/watchtower_observer_web_scraper/plugin.lua's
+    -- ad-hoc "test this observer config against a URL" poller
+    -- (the external observer plugin's plugin.lua's
     -- observer_config_test_poll task, which has no role of its own at all
     -- today). Lets an operator dedicate one worker to the main
     -- observe/analyze/evaluate/deliver flow and another to just servicing
@@ -302,7 +302,7 @@ function M.build_config(mode, env)
     test_poll = {
       enabled = (file_observer_test_poll.enabled) ~= false,
       -- nil = falls back to the shared root config.interval, resolved
-      -- where this is actually consumed (watchtower_observer_web_scraper's
+      -- where this is actually consumed (the external plugin's
       -- plugin.lua) - same "role has its own interval, defaulting to
       -- the shared one" pattern role_interval implements above, but
       -- test_poll isn't itself a role, so it can't reuse that helper as-is.
@@ -437,6 +437,35 @@ function M.build_config(mode, env)
       timeout_seconds = file_evaluate_reap_stale.timeout_seconds or 300,
     },
     run_on_start = role_run_on_start("evaluator"),
+  }
+
+  -- watchtower_worker_core.plugins.events' long-poll settings (standalone
+  -- only - the embedded worker never builds this connector method, see that
+  -- plugin's own header comment). Not itself a role - applies across
+  -- whichever roles the events plugin determines it needs to wake, derived
+  -- from config.roles/config.observer.test_poll above, not from a "events"
+  -- entry in `roles`.
+  local file_events = file_config.events or {}
+  config.events = {
+    -- Explicit off-switch for the whole long-poll task, independent of
+    -- which roles/source modes this worker declares - lets an operator
+    -- disable it outright (e.g. while debugging, or on a worker where the
+    -- extra long-lived HTTP connection isn't wanted) without having to
+    -- fight wake_keys.for_config's automatic role-derived key list. Same
+    -- "default true, explicit ~= false check" pattern as
+    -- config.observer.observe.enabled/config.observer.test_poll.enabled
+    -- above.
+    enabled = file_events.enabled ~= false,
+    -- How long (seconds) the server holds GET /api/workers/:id/events open
+    -- before returning 204 - see server/plugins/workers/plugin.lua's own
+    -- EVENTS_MAX_WAIT_SECONDS cap (25), which this can't exceed regardless
+    -- of what's set here.
+    wait = file_events.wait or 25,
+    -- Retry backoff after a failed poll (network error, non-2xx) - a
+    -- successful poll is always immediately re-issued (see plugins/events.lua),
+    -- so this is only ever consulted on failure, same role
+    -- heartbeat_retry_interval plays for the heartbeat task.
+    retry_interval = file_events.retry_interval or 5,
   }
 
   return config

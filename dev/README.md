@@ -85,10 +85,16 @@ default (no `WORKER_CONFIG_FILE`/`SERVER_API_KEY` configured yet).
 Note: `WORKER_CONFIG_FILE`'s `plugins` field defaults to `{}` — this applies
 to the embedded worker (`lapis` service) too, so even with `USE_EMBED_WORKER=1`
 nothing actually observes until a `WORKER_CONFIG_FILE` exists and its `plugins`
-array names `"watchtower_observer_web_scraper.plugin"` (see
+array names the observer plugin module (see
 `docker/worker/worker_config.example.lua`). Third-party plugin modules go in
 `worker_plugins/` (gitignored, bind-mounted into both `lapis` and `worker`)
 and are referenced by module path the same way.
+
+External observer plugin wiring is driven by variables in `dev/.env` (see
+`dev/.env.example`): `OBSERVER_PLUGIN_SRC` (host path of the plugin's `src/`),
+and `OBSERVER_PLUGIN_NAME` (its directory name under `/worker_plugins/`). The
+server itself knows nothing about observer types - the worker-side plugin
+(listed in `WORKER_CONFIG_FILE`'s `plugins`) provides them.
 
 ## Dev references
 
@@ -132,9 +138,10 @@ docker compose up -d
 # Database schema changes
 
 There is no migration system - the whole schema lives in one file,
-`config/dataset/init.sql`, applied by Postgres' `docker-entrypoint-initdb.d`
-on first boot only. Changing the schema means editing that file and
-recreating the volume:
+`server/dataset/schema.sql`, applied by the server itself, once, at boot
+(`server/workers/bootstrap_schema.lua`, idempotent - it only runs against a
+database that doesn't have it yet). Changing the schema means editing that
+file and recreating the volume:
 
 ```console
 docker compose down -v

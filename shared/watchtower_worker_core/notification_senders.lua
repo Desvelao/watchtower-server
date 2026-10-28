@@ -147,7 +147,7 @@ function M.new(transport, smtp_cfg, email_notifier)
   local SENDERS = {}
 
   -- channel.options.headers is plain user-authored text (see
-  -- config/dataset/init.sql's notification_channels_webhook) - expected to
+  -- server/dataset/schema.sql's notification_channels_webhook) - expected to
   -- be a JSON object of extra header names/values, decoded here; an
   -- unparseable/absent value just means no extra headers, not an error.
   -- channel.options.body is rendered fresh per alert (see alert_vars
@@ -156,7 +156,7 @@ function M.new(transport, smtp_cfg, email_notifier)
   -- since webhook_transport re-encodes whatever `template` returns).
   -- render_template is called with `json_escape` here specifically because
   -- of that decode: an interpolated value containing a `"`, `\`, or a raw
-  -- control character (e.g. a scraped title with a quote in it) would
+  -- control character (e.g. an observed title with a quote in it) would
   -- otherwise corrupt the surrounding JSON text and make cjson_safe.decode
   -- return nil below, silently breaking (or nulling) the whole delivery.
   -- One HTTP call per alert, each independently pcall'd so one alert's

@@ -121,6 +121,14 @@ function Plugin.setup(app, deps)
             return { status = 400, json = { success = false, message = "Options are not defined for the notification channel." } }
         end
 
+        local existing = models.NotificationChannels:find(data.id)
+        if not existing then
+            return { status = 404, json = { success = false, message = "Notification channel not found." } }
+        end
+        if existing.type ~= data.type then
+            return { status = 400, json = { success = false, message = "type is immutable after creation" } }
+        end
+
         local ok, result = pcall(function()
             return with_transaction(function() return models.NotificationChannels:update(data, data.id) end)
         end)
@@ -294,7 +302,11 @@ function Plugin.setup(app, deps)
         if self.params.ids and self.params.ids ~= "" then
           ids = {}
           for id_str in self.params.ids:gmatch("[^,]+") do
-            table.insert(ids, tonumber(id_str))
+            local id = tonumber(id_str)
+            if not id then
+              return { status = 400, json = { message = "ids must be a comma-separated list of numeric ids" } }
+            end
+            table.insert(ids, id)
           end
         end
 
@@ -397,7 +409,7 @@ function Plugin.setup(app, deps)
 
     -- Read-only, flat view over the per-(alert, channel) delivery queue/
     -- outcome the notify pipeline produces (see alert_deliveries's own
-    -- header comment in config/dataset/init.sql, and
+    -- header comment in server/dataset/schema.sql, and
     -- services/delivery_queue.lua below) - alerts.deliveries already
     -- surfaces this nested per-alert, this is the filterable/sortable/
     -- paginated flat equivalent for a dedicated list view. alert_deliveries
@@ -427,6 +439,8 @@ function Plugin.setup(app, deps)
       fields_search_params = {
         {
           key = "search",
+          -- The top-level OR is safe next to the other filters: lib/routes.lua's
+          -- get_db_where_clause_from_request_params parenthesizes every fragment.
           map_clause = function(p)
             return string.format(
               "EXISTS (SELECT 1 FROM notification_channels nc WHERE nc.id = alert_deliveries.channel_id AND %s) OR %s",

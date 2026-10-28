@@ -48,15 +48,19 @@ const trailingColumns = [
   { key: 'error_at', label: 'Last error', class: 'whitespace-nowrap' },
 ];
 
-// ref_id is polymorphic (see config/dataset/init.sql's comment on
+// ref_id is polymorphic (see server/dataset/schema.sql's comment on
 // jobs.from_scheduler): from_scheduler=true -> a scheduler_tasks.id,
-// from_scheduler=false -> an observables.id. Resolved lazily, one GET per
+// from_scheduler=false -> an observables.id, except type='observer_test'
+// rows, whose ref_id is an observer_config_test_requests.id (an independent
+// sequence, with no single-row GET endpoint) and so is never resolved - that
+// would risk matching an unrelated observable. Resolved lazily, one GET per
 // unique id (cached here), since GET /api/observables|scheduler only
 // filters `id` by exact equality, not a batch/IN list.
 const observableCache = reactive({});
 const taskCache = reactive({});
 
 async function ensureResolved(job) {
+  if (job.type === 'observer_test') return;
   if (job.from_scheduler) {
     if (taskCache[job.ref_id] !== undefined) return;
     taskCache[job.ref_id] = null;
@@ -87,6 +91,7 @@ watch(
 );
 
 function refLabel(job) {
+  if (job.type === 'observer_test') return `test request #${job.ref_id}`;
   if (job.from_scheduler) {
     const task = taskCache[job.ref_id];
     return task ? `${task.name} (${task.type})` : `task #${job.ref_id}`;
@@ -110,7 +115,7 @@ const columns = computed(() => {
 const tableItems = computed(() =>
   store.items.map((job) => ({
     ...job,
-    ...(job.from_scheduler ? {} : observableCache[job.ref_id]?.properties || {}),
+    ...(job.from_scheduler || job.type === 'observer_test' ? {} : observableCache[job.ref_id]?.properties || {}),
   })),
 );
 
@@ -126,6 +131,8 @@ const otherFields = computed(() => [
       { value: 'observe', label: 'Observe' },
       { value: 'analyze', label: 'Analyze' },
       { value: 'notify', label: 'Notify' },
+      { value: 'deliver', label: 'Deliver' },
+      { value: 'observer_test', label: 'Observer test' },
     ],
   },
   {

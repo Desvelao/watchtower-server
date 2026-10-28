@@ -5,7 +5,7 @@
 -- matching enforcement point would be meaningless, so this table itself
 -- stays hardcoded. Mirrored by hand in public/src/constants/permissions.js
 -- - keep both in sync. Also mirrored (as literal arrays) in the seed
--- INSERT INTO roles in config/dataset/init.sql.
+-- INSERT INTO roles in server/dataset/schema.sql.
 return {
   OBSERVABLES_READ = "observables:read",
   OBSERVABLES_CREATE = "observables:create",
@@ -23,7 +23,6 @@ return {
 
   ALERTS_READ = "alerts:read",
   ALERTS_CREATE = "alerts:create",
-  ALERTS_UPDATE = "alerts:update",
   ALERTS_DELETE = "alerts:delete",
 
   RULES_READ = "rules:read",

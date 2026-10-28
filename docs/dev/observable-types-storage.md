@@ -10,7 +10,7 @@ queried, and why.
 
 Observable types are defined by users at runtime, through the UI - not by a
 developer editing code. This repository also has **no migration system**:
-schema changes mean hand-editing `config/dataset/init.sql` and recreating the
+schema changes mean hand-editing `server/dataset/schema.sql` and recreating the
 whole dev DB volume (`docker compose down -v`). A design where each observable
 type got its own real columns (or its own child table, the way
 `notification_channels`'s discord/webhook split works) would require running
@@ -35,6 +35,8 @@ JSON array of property-definition objects:
 {
   "name": "price",
   "label": "Price",
+  "description": "Current price in the shop's currency",
+  "group": "Pricing",
   "type": "number",
   "multiple": false,
   "required": true,
@@ -46,12 +48,22 @@ JSON array of property-definition objects:
 - `name` - the key this property is stored under in `properties`. Must match
   `^[a-z][a-z0-9_]*$` and be unique within the schema.
 - `label` - display label; defaults to `name`.
+- `description` - optional string; informational text shown near the field's
+  input by schema-driven forms (e.g. `SchemaFieldsForm.vue`). Must be a string
+  if present.
+- `group` - optional string; a UI grouping label. Fields sharing the same value
+  are rendered together under one heading, in schema order. Must be a string
+  if present.
 - `type` - one of `string`, `number`, `boolean`, `date`, `url`, `enum`, `map`.
 - `multiple` - if `true`, the value is a JSON array of the base type instead
   of a single value.
 - `required` - if `true`, the property must be present on create/update.
 - `searchable` - if `true` (string/url/enum types only), the property's
   value is included in the resource's free-text `search` query param.
+- `list_column` - boolean, default `false`. Only meaningful in an observable
+  type's `observer_config_schema` / `observer_mechanism_schema` (it is accepted
+  but ignored elsewhere): shows the field as an extra column in the Observer
+  Configs table when that observable type is the active filter.
 - `validations` - allowed keys depend on `type`:
   - `string` / `url`: `minLength`, `maxLength`, `pattern` (a Lua pattern)
   - `number` / `date`: `min`, `max`
@@ -73,9 +85,11 @@ resolved from `observable_type_id`:
   test for a `multiple: true` property.
 - `properties.<name>.gt=<value>` / `.gte=` / `.lt=` / `.lte=` - a cast
   comparison (`(properties->>'<name>')::numeric`/`::timestamp <op> <value>`),
-  available only for `number`/`date`-typed properties.
+  available only for single-valued `number`/`date`-typed properties (not
+  registered for `multiple: true`).
 - The free-text `search` param additionally matches (`ILIKE`) every property
-  marked `searchable: true`.
+  marked `searchable: true`; for a `multiple: true` property it matches if any
+  array element matches.
 
 Examples:
 

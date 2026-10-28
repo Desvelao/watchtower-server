@@ -25,7 +25,7 @@ return {
   -- default (see scheduler.interval below).
   --
   -- Every *.interval / *.reap_stale.interval / heartbeat_interval /
-  -- observers[].remote_sites_refresh_interval field in this file accepts
+  -- observers[].remote_targets_refresh_interval field in this file accepts
   -- EITHER a plain number of seconds (as below) OR a cron expression
   -- string - the same 5-field "minute hour day-of-month month
   -- day-of-week" grammar scheduler_tasks.cron_expression uses (see
@@ -132,13 +132,13 @@ return {
   -- observer.source above. Defaults to {} - nothing beyond the five built-in
   -- role plugins (scheduler/analyzer/evaluator/deliver/observer) is loaded
   -- unless named here, so "observer" role observing needs
-  -- watchtower_observer_web_scraper.plugin listed explicitly, as below. A
+  -- my_observer_plugin.plugin listed explicitly, as below. A
   -- plugin module doesn't need to already be part of this repo/image - it
   -- just needs to be on LUA_PATH, e.g. the worker_plugins/ bind mount (see
   -- dev/docker-compose.yml) - to make a third-party plugin available with no
   -- code change or rebuild, only this list.
   plugins = {
-    "watchtower_observer_web_scraper.plugin",
+    "my_observer_plugin.plugin",
   },
 
   -- "observer"-role settings.
@@ -179,9 +179,9 @@ return {
       -- enabled = false,
     },
 
-    -- The ad-hoc "test this scraper config against a URL" poller
+    -- The ad-hoc "test this observer config" poller
     -- (observer_config_test_poll, registered by
-    -- watchtower_observer_web_scraper.plugin above whenever it's loaded -
+    -- my_observer_plugin.plugin above whenever it's loaded -
     -- serves POST /api/observer_configs/test and friends). Unlike the main
     -- observe task, this one has never depended on "observer" being in
     -- `roles` at all - only these two settings gate it. Applies to BOTH
@@ -216,8 +216,8 @@ return {
 
     -- Observer definitions - each entry routes observables of one observable type (a
     -- server-side observable_types.name) to one observer implementation. `type`
-    -- selects the implementation (currently only "web_scraper" exists,
-    -- worker_plugins/watchtower_observer_web_scraper/observers/web_scraper.lua); `observable_type` is this worker's own
+    -- selects the implementation (provided by an observer plugin, e.g.
+    -- worker_plugins/my_observer_plugin/observers/my_observer.lua); `observable_type` is this worker's own
     -- local mapping from that name to this observer - the server has no
     -- notion of this mapping at all: routing to a concrete handler is
     -- decided by the worker's own config, not something the server
@@ -226,59 +226,59 @@ return {
     -- An observer `type` becomes available simply by `require`-ing its
     -- module once at worker boot - it self-registers with
     -- watchtower_worker_core.observer_registry (main.lua already does this
-    -- for "web_scraper"). A third-party observer type module written
+    -- for "my_observer"). A third-party observer type module written
     -- outside this repo works the same way - see
     -- shared/watchtower_worker_core/README.md's "Writing a new observer
     -- type" section.
     -- Only used by the standalone worker; the embedded worker ignores this
-    -- key entirely - it builds one DB-backed web_scraper observer per
+    -- key entirely - it builds one DB-backed observer per
     -- enabled observable_type_id found in observer_configs directly (it's
     -- already in-process there, see server/workers/observe_pending_worker.lua).
     observers = {
       -- {
-      --   id = "product_scraper",
-      --   type = "web_scraper",
+      --   id = "example_observer",
+      --   type = "my_observer",
       --   observable_type = "product",
       --   -- url_property = "url",  -- optional, defaults to "url" - which of
-      --   -- this observable type's `properties` holds the URL to scrape.
+      --   -- this observable type's `properties` holds the URL to observe.
       --
-      --   -- sites_source = "local" (default) reads `sites` below, a static
-      --   -- list baked into this file. sites_source = "remote" instead
-      --   -- fetches the current site list from the server, via the generic
-      --   -- Observer Configs UI/API (GET /api/observer_configs/site) -
-      --   -- lets an operator manage sites centrally instead of keeping a
+      --   -- targets_source = "local" (default) reads `targets` below, a static
+      --   -- list baked into this file. targets_source = "remote" instead
+      --   -- fetches the current target list from the server, via the generic
+      --   -- Observer Configs UI/API (GET /api/observer_configs/targets) -
+      --   -- lets an operator manage targets centrally instead of keeping a
       --   -- copy in every worker's own config file. Requires the API key
       --   -- below to also have `observer_configs:read`. Must also set
       --   -- remote_source = "observer_configs" and observable_type_id
       --   -- below - that's the only supported remote source.
-      --   -- sites_source = "remote",
+      --   -- targets_source = "remote",
       --
-      --   -- Required together with sites_source = "remote".
+      --   -- Required together with targets_source = "remote".
       --   -- observable_type_id must match a real observable_types.id.
       --   -- remote_source = "observer_configs",
       --   -- observable_type_id = 1,
       --
-      --   -- Only meaningful when sites_source = "remote": how often
+      --   -- Only meaningful when targets_source = "remote": how often
       --   -- (seconds, or a cron expression - see the root interval's
-      --   -- own comment above) THIS observer re-fetches its own site list from the
+      --   -- own comment above) THIS observer re-fetches its own target list from the
       --   -- server, as part of its own :run (see
-      --   -- worker_plugins/watchtower_observer_web_scraper/observers/web_scraper.lua) - a "remote" observer
-      --   -- otherwise only fetches its site list once, at construction
+      --   -- worker_plugins/my_observer_plugin/observers/my_observer.lua) - a "remote" observer
+      --   -- otherwise only fetches its target list once, at construction
       --   -- time. Defaults to 60 if omitted. This is entirely this one
       --   -- entry's own setting - every "remote" entry refreshes on its
       --   -- own cadence, independently of any other observer this worker
-      --   -- declares. A site created/edited on the server takes effect on
+      --   -- declares. A target created/edited on the server takes effect on
       --   -- this worker's next observe past that interval, no restart
       --   -- needed.
-      --   -- remote_sites_refresh_interval = 60,
+      --   -- remote_targets_refresh_interval = 60,
       --
-      --   sites = {
-      --     -- Ignored when sites_source = "remote". Same shape as
+      --   targets = {
+      --     -- Ignored when targets_source = "remote". Same shape as
       --     -- server/plugins/observer_configs's `POST /api/observer_configs`
       --     -- body - field keys must match the observable type's
       --     -- observation_schema property names.
       --     -- {
-      --     --   name = "example-site",
+      --     --   name = "example-target",
       --     --   urls_match = { "^https?://example%.com/" },
       --     --   fields = {
       --     --     price = { selector = { ".price" } },
@@ -439,6 +439,34 @@ return {
     -- run_on_start = false,
   },
 
+  -- Long-poll settings for the realtime "wake" mechanism
+  -- (GET /api/workers/:id/events, watchtower_worker_core.plugins.events) -
+  -- lets this worker react to a new claimable row (a fresh observer-config
+  -- test request, a scheduler-fired observe/analyze/notify job, a newly
+  -- enqueued delivery) within about a second instead of waiting out
+  -- whichever role's own `interval` above. Purely a latency optimization: a
+  -- dropped/missed wake just means "back to today's polling latency", never
+  -- "the work is lost" - every woken role's own task still runs on its
+  -- normal interval regardless. Applies to whichever "queue"-sourced roles
+  -- this worker declares, plus observer.test_poll above, if enabled -
+  -- nothing to configure per role, this worker figures out which wake keys
+  -- it needs on its own.
+  events = {
+    -- Explicit off-switch for this whole task, independent of which
+    -- roles/source modes this worker declares - e.g. while debugging, or
+    -- on a worker where the extra long-lived HTTP connection isn't wanted.
+    -- enabled = false,
+
+    -- How long (seconds) each long-poll call waits before returning with
+    -- nothing new - capped server-side at 25 regardless of what's set here.
+    -- wait = 25,
+
+    -- Retry backoff after a failed poll (network error, non-2xx). A
+    -- successful poll is always re-issued immediately, so this is only ever
+    -- consulted on failure.
+    -- retry_interval = 5,
+  },
+
   -- Standalone-only: how this worker reaches the server. The API key
   -- comes from (most-secure-first): SERVER_API_KEY_FILE (a path to a
   -- separately-permissioned secret file - how Docker/Compose secrets
@@ -456,4 +484,11 @@ return {
   -- Opt-in (default off): self-report a secret-scrubbed copy of this
   -- config in every heartbeat (see shared/watchtower_worker_core/config_report.lua).
   report_config = false,
+
+  -- debug|info|warn|error, defaults to "info". The LOG_LEVEL env var, if
+  -- set, overrides this. "debug" additionally logs every HTTP request and
+  -- full response body this worker makes, which can include secrets (a
+  -- claimed delivery batch carries channel configs such as webhook URLs)
+  -- - only enable it while debugging, never in shared/persisted logs.
+  -- log_level = "debug",
 }

@@ -17,7 +17,7 @@
 -- narrow {heartbeat(fields) -> ok, err; started_at?} contract M._run_heartbeat
 -- below calls unconditionally, regardless of which roles are configured -
 -- also carries its own connection_type, "http"/"embedded", read by
--- M._run_heartbeat below and by watchtower_observer_web_scraper.plugin's
+-- M._run_heartbeat below and by the external observer plugin's
 -- own transport selection), observable_types, post_observation,
 -- observer_registry (set by M.build itself, see below - not available
 -- until every plugin's setup has run), logger, and whatever else a caller
@@ -49,7 +49,7 @@
 --                            anything to register at all.
 --   observer_deps          - merged into the one `deps` table passed to
 --                            watchtower_worker_core.observer_registry.new
---                            (e.g. fetch_remote_sites/scraper_transport) -
+--                            (e.g. fetch_remote_targets/a fetch transport) -
 --                            lets an observer-type plugin contribute its own
 --                            construction-time deps without this module
 --                            needing to know their names.
@@ -390,8 +390,8 @@ end
 -- Recomputes context.config.capabilities/reportable_config_json from
 -- context.observer_registry (see config_report.lua's own header comment -
 -- an observer's own capabilities can change silently between heartbeats,
--- e.g. once a sites_source="remote" observer's own maintenance task
--- refreshes its site list), merges every plugin's heartbeat_properties()
+-- e.g. once a targets_source="remote" observer's own maintenance task
+-- refreshes its target list), merges every plugin's heartbeat_properties()
 -- plus context.extra_heartbeat_properties() (an optional escape hatch for a
 -- runtime-specific counter no role/plugin owns - e.g. the embedded worker's
 -- own observations_analyzed, bumped by its ingest-on-observe path), and
@@ -544,13 +544,31 @@ function M.build(plugins, context)
   end
 
   -- pcall'd: an observer type's constructor can raise on a construction-time
-  -- fetch failure (e.g. watchtower_observer_web_scraper.observers.web_scraper's
-  -- sites_source="remote", see its own header comment) - a config/network
+  -- fetch failure (e.g. the external plugin's observer module's
+  -- targets_source="remote", see its own header comment) - a config/network
   -- problem, not a reason to take down the whole worker (every other
   -- plugin's tasks would otherwise never get to run at all). Falls back to
   -- an empty registry (no observer types registered) rather than a nil
   -- context.observer_registry, so every task above that already closed over
   -- `context` still finds a well-formed (if empty) registry to call.
+  --
+  -- An observers[] entry that omits `type` resolves to the one observer type
+  -- plugins registered above (the embedded worker builds its entries from
+  -- the observer_configs table, which carries no type of its own). With zero
+  -- or several registered types it stays unresolved and observer_registry.new
+  -- reports the unknown type.
+  local builder_names = {}
+  for name in pairs(context.observer_types:builders()) do
+    table.insert(builder_names, name)
+  end
+  if #builder_names == 1 then
+    for _, observer_config in ipairs(context.config.observer and context.config.observer.observers or {}) do
+      if observer_config.type == nil then
+        observer_config.type = builder_names[1]
+      end
+    end
+  end
+
   local registry_ok, registry_or_err = pcall(
     observer_registry.new,
     context.config.observer and context.config.observer.observers,
@@ -613,6 +631,14 @@ function M.build(plugins, context)
     _declared_roles = declared_roles,
     _logger = context.logger,
   }, Lifecycle)
+
+  -- Exposed on context itself (not just this function's own local) so a
+  -- task's run() closure built from OUTSIDE this file - e.g.
+  -- watchtower_worker_core.plugins.events' events_poll task - can reach
+  -- :tasks_by_role at call time. Safe even though it's assigned after every
+  -- plugin's setup() already ran and closed over `context`: no task is ever
+  -- actually invoked until well after this function returns.
+  context.lifecycle = lifecycle
 
   return lifecycle
 end

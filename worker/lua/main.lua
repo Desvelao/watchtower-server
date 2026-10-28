@@ -96,12 +96,12 @@ end)
 -- observer-type/task plugin(s) config.plugins names (see
 -- watchtower_worker_core.runner's build_config and plugin_loader.lua) -
 -- config.plugins defaults to {}, so a WORKER_CONFIG_FILE wanting to observe
--- products must list "watchtower_observer_web_scraper.plugin" explicitly.
+-- products must list "my_observer_plugin.plugin" explicitly.
 -- This file never touches watchtower_worker_core.observer_registry,
--- watchtower_observer_web_scraper's own
--- observer_config_test_poller/observers.web_scraper, or
--- provider_http.lua's site-config/test-observation methods directly - that
--- plugin builds everything it needs (including the outbound scrape-fetch
+-- the external plugin's own
+-- observer_config_test_poller/observer module, or
+-- provider_http.lua's target-config/test-observation methods directly - that
+-- plugin builds everything it needs (including the outbound fetch
 -- transport) from context.connector (http_provider below) itself, inside
 -- its own setup(); this worker only ever gets the vendored rock's own
 -- blocking default, since context.connector.connection_type is "http", not

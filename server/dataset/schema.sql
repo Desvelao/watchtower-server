@@ -1,6 +1,13 @@
--- watchtower-server schema. Applied by Postgres' docker-entrypoint-initdb.d on
--- first boot only - there is no migration system. Changing this file
--- requires recreating the volume:
+-- watchtower-server schema. Applied by the server itself, once, at boot
+-- (server/workers/bootstrap_schema.lua, required from server/nginx.conf's
+-- init_worker_by_lua_block before bootstrap_admin) rather than by Postgres'
+-- docker-entrypoint-initdb.d - this file ships inside the server image/bind
+-- mount (server/ is COPY'd wholesale in prod, bind-mounted in dev) instead
+-- of needing a separate bind mount into the db container, so a prod
+-- deployment needs no repo checkout beyond the published images. Still no
+-- migration system - bootstrap_schema.lua only ever applies this once, on
+-- a database that doesn't have it yet (detected via the `roles` table's
+-- absence). Changing this file requires recreating the volume:
 --   cd dev && docker compose down -v && docker compose up -d
 
 -- ===================== Users, roles, API keys =====================
@@ -65,8 +72,7 @@ CREATE INDEX api_keys_user_id_idx ON api_keys (user_id);
 -- can supply extraction config for, and which are required, and
 -- `observer_mechanism_schema` describes the observer-type-specific "how to
 -- reach the source" fields an `observer_configs` row's `mechanism_config`
--- can/must supply (e.g. for web_scraper: urls_match, headers, ssl_verify -
--- see lib/observer_type_catalog.lua's header comment) - authored
+-- can/must supply (e.g. for a plugin-provided observer type: urls_match, headers, ssl_verify) - authored
 -- explicitly here rather than hardcoded per observer type, so different
 -- observable types can group/describe/require these fields differently.
 -- Field NAMES in observer_config_schema/observer_mechanism_schema are only
@@ -74,14 +80,11 @@ CREATE INDEX api_keys_user_id_idx ON api_keys (user_id);
 -- them expects by name (observation_schema property names / a given
 -- observer type's own field vocabulary respectively) - the schema engine
 -- itself doesn't know or enforce that.
--- Which observer implementation (see lib/observer_type_catalog.lua) reads
--- observer_config_schema/observer_mechanism_schema/observer_configs rows
--- for a given observable type is NOT itself configured here - exactly one
--- observer type (`web_scraper`) is implemented today, so every observable
--- type implicitly resolves to it (lib/observer_type_catalog.lua's
--- M.default()) rather than this being a stored, per-type choice. A second
--- real observer type would resolve that mapping in that one module, not by
--- reintroducing a column here.
+-- Which observer implementation reads observer_config_schema/
+-- observer_mechanism_schema/observer_configs rows for a given observable
+-- type is NOT configured here, nor anywhere server-side: the server knows
+-- nothing about observer types, and the worker-side observer plugin that
+-- consumes the rows is the only thing that does.
 -- The four schema columns are arrays of property-definition objects
 -- ({name,label,description,group,type,multiple,required,searchable,
 -- validations}), validated in Lua by server/lib/property_schema.lua, not
@@ -163,6 +166,9 @@ CREATE TABLE rules (
 );
 
 CREATE INDEX rules_enabled_idx ON rules (enabled);
+-- Names must be unique: import conflict detection matches an existing row by
+-- name (see server/lib/source_document_manager.lua's preflight_import).
+CREATE UNIQUE INDEX rules_name_key ON rules (name);
 
 -- ===================== Alerts =====================
 
@@ -175,7 +181,7 @@ CREATE TABLE workers (
   version VARCHAR(255) DEFAULT NULL,
   capabilities VARCHAR(255)[] DEFAULT NULL,
   -- Self-reported, optional JSON blob describing the worker's configured
-  -- sites/timing. The worker is responsible for omitting secrets before
+  -- targets/timing. The worker is responsible for omitting secrets before
   -- sending it - stored as opaque text, not parsed or enforced server-side.
   config TEXT DEFAULT NULL,
   uptime_seconds INTEGER DEFAULT NULL,
@@ -333,9 +339,8 @@ CREATE TABLE jobs (
   action TEXT DEFAULT NULL,
   -- Arbitrary JSON payload a report can carry back alongside its
   -- status/action/message - only type='observer_test' populates this today
-  -- (the {ok, data} scraped result from
-  -- worker_plugins/watchtower_observer_web_scraper/scraper_creator.lua's
-  -- WebScraper:run), but the column is generic for any future job type
+  -- (the {ok, data} observed result from
+  -- the external observer plugin's observer builder's run method), but the column is generic for any future job type
   -- that needs more than a short message string.
   result JSONB DEFAULT NULL,
   retries INTEGER NOT NULL DEFAULT 0,
@@ -542,6 +547,9 @@ CREATE TABLE notification_policies (
 );
 
 CREATE INDEX notification_policies_enabled_idx ON notification_policies (enabled);
+-- Names must be unique: import conflict detection matches an existing row by
+-- name (see server/lib/source_document_manager.lua's preflight_import).
+CREATE UNIQUE INDEX notification_policies_name_key ON notification_policies (name);
 
 -- Per-(alert, channel) durable delivery queue for the notify pipeline.
 -- Deliberately NOT columns on `alerts` itself - alerts records what fired,
@@ -594,17 +602,16 @@ CREATE INDEX alert_deliveries_channel_id_idx ON alert_deliveries (channel_id);
 -- ===================== Observer configs =====================
 
 -- Generic observer-configuration registry, applicable to ANY observable_type
--- and (in the future) any observer_type, not just the implicit
--- "product"/web_scraper pairing. Many rows may share one
--- observable_type_id - each is one named "site" (or future observer_type's
+-- and any observer type, not just the implicit "product"/plugin-provided
+-- observer pairing. Many rows may share one
+-- observable_type_id - each is one named "target" (or future observer_type's
 -- equivalent unit), fed together into one worker-side observer instance
 -- for that observable_type (see
 -- shared/watchtower_worker_core/observer_registry.lua: at most one
 -- OBSERVER INSTANCE per observable_type, but that instance wraps
--- arbitrarily many sites/units). There is deliberately no `observer_type`
--- column here: exactly one observer type (`web_scraper`) is implemented
--- today, resolved via lib/observer_type_catalog.lua's M.default() wherever
--- it's needed (see plugins/observer_configs/plugin.lua), not stored.
+-- arbitrarily many targets/units). There is deliberately no `observer_type`
+-- column here: the server is observer-type-agnostic, so the worker-side
+-- plugin that consumes these rows is what decides how to read them.
 CREATE TABLE observer_configs (
   id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,
@@ -615,10 +622,8 @@ CREATE TABLE observer_configs (
   -- server/lib/observer_field_schema.lua - against the required
   -- field-name list taken from observable_type_id's own
   -- observer_config_schema (authored on observable_types, see above), not
-  -- a hardcoded price/discount/available list. The per-field shape
-  -- (selector|compute) itself is owned by observer_type's catalog entry
-  -- (server/lib/observer_type_catalog.lua) - only web_scraper exists
-  -- today, so it's the only shape in practice.
+  -- a hardcoded price/discount/available list. The per-field shape is
+  -- the default selector|compute one (observer_field_schema.lua).
   fields JSONB NOT NULL,
   -- Observer-type-specific "mechanism" config: everything about HOW to
   -- reach/validate the source that is NOT about which fields to extract -
@@ -646,15 +651,11 @@ CREATE INDEX observer_configs_enabled_idx ON observer_configs (enabled);
 -- (see jobs.type CHECK above).
 CREATE TABLE observer_config_test_requests (
   id SERIAL PRIMARY KEY,
-  -- {mode:"adhoc", observable_type_id, observer_type, name, fields,
+  -- {mode:"adhoc", observable_type_id, name, fields,
   --  mechanism_config, observer_config_id?} | {mode:"saved", observer_config_id} |
-  -- {mode:"all", observable_type_id, observer_type} - the observable_type_id
+  -- {mode:"all", observable_type_id} - the observable_type_id
   -- discriminator "all" needs here is required since observer_configs spans
-  -- many observable types. `observer_type` is always
-  -- lib/observer_type_catalog.lua's M.default() (see
-  -- plugins/observer_configs/plugin.lua), never client-supplied - stored
-  -- here purely so the worker-side poller doesn't need its own extra
-  -- lookup at execution time. .../:id/test writes "adhoc" (with
+  -- many observable types. .../:id/test writes "adhoc" (with
   -- observer_config_id set, for traceability only - unused by the worker)
   -- when the request supplies fields/mechanism_config overrides (e.g. the
   -- edit form's unsaved state), so the test reflects those rather than
@@ -678,7 +679,7 @@ INSERT INTO roles (name, permissions) VALUES
     'observables:read','observables:create','observables:update','observables:delete',
     'observations:read','observations:create','observations:delete',
     'observable_types:read','observable_types:create','observable_types:update','observable_types:delete',
-    'alerts:read','alerts:create','alerts:update','alerts:delete',
+    'alerts:read','alerts:create','alerts:delete',
     'rules:read','rules:create','rules:update','rules:delete',
     'scheduler:read','scheduler:create','scheduler:update','scheduler:delete',
     'workers:read','workers:write','workers:delete',
@@ -695,7 +696,7 @@ INSERT INTO roles (name, permissions) VALUES
     'observables:read','observables:create','observables:update','observables:delete',
     'observations:read','observations:create','observations:delete',
     'observable_types:read',
-    'alerts:read','alerts:create','alerts:update','alerts:delete',
+    'alerts:read','alerts:create','alerts:delete',
     'rules:read','rules:create','rules:update','rules:delete',
     'scheduler:read','scheduler:create','scheduler:update','scheduler:delete',
     'workers:read',

@@ -186,13 +186,27 @@ return function(app, deps, observable_type_manager)
 
   app:delete(
     base_path .. "/:id",
-    compose(require_auth, rbac:with(perms.OBSERVATIONS_DELETE))(function(self)
+    compose(
+      require_auth,
+      rbac:with(perms.OBSERVATIONS_DELETE),
+      with_error_handling("Failed to delete observation", "Unable to remove observation.")
+    )(function(self)
       local id = self.params.id
       if not id then
         return { status = 400, json = { error = "Missing observation id." } }
       end
 
-      local opr, err = models.Observations:find({ id = id }):delete()
+      local item = models.Observations:find({ id = id })
+      if not item then
+        return { status = 404, json = { message = "Observation not found", id = id } }
+      end
+
+      local ok, opr, err = pcall(function()
+        return item:delete()
+      end)
+      if not ok then
+        return { status = 500, json = { error = opr or "Unable to remove observation." } }
+      end
       if not opr then
         return { status = 500, json = { error = err or "Unable to remove observation." } }
       end

@@ -1,5 +1,5 @@
 -- Resolves config.plugins (an array of Lua module path strings, e.g.
--- "watchtower_observer_web_scraper.plugin" or a third-party observer-type/task
+-- "my_observer_plugin.plugin" or a third-party observer-type/task
 -- plugin module) into the actual plugin tables watchtower_worker_core.lifecycle
 -- expects, so worker/lua/main.lua and server/workers/observe_pending_worker.lua
 -- don't each duplicate the same require-loop.

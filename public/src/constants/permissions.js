@@ -18,7 +18,6 @@ export const PERMISSIONS = {
 
   ALERTS_READ: 'alerts:read',
   ALERTS_CREATE: 'alerts:create',
-  ALERTS_UPDATE: 'alerts:update',
   ALERTS_DELETE: 'alerts:delete',
 
   RULES_READ: 'rules:read',

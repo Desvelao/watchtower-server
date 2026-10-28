@@ -33,9 +33,9 @@ tags:
   - name: Observables
     description: The things being tracked
   - name: Observations
-    description: Price observation ingest/history - posting one is the sole entry point for getting a fired Alert into the system
+    description: Observation ingest/history - posting one only stores it (no rule matching runs in the request); alerts are raised later by an "analyzer"-role worker
   - name: Alerts
-    description: Fired alert instances (read + delete only - created as a side effect of an ingested Observation)
+    description: Fired alert instances - created by "analyzer"-role workers (via POST /api/alerts for the standalone worker, in-process for the embedded one), never as a side effect of ingesting an Observation; also readable and deletable
   - name: Rules
     description: The condition DSL the RuleEngine matches against new Observations
   - name: Workers
@@ -48,6 +48,8 @@ tags:
     description: Discord/webhook destinations
   - name: NotificationPolicies
     description: Routes fired Alerts to NotificationChannels, via the same condition DSL Rules use - evaluated by a scheduler task of type='notify'
+  - name: ObserverConfigs
+    description: Admin-authored per-observable-type extraction config (fields + mechanism_config) the observer reads, plus the async ad-hoc "test this config" flow
 
 components:
   securitySchemes:
@@ -108,6 +110,17 @@ components:
           type: string
           description: Storage key within a properties object. Must match ^[a-z][a-z0-9_]*$.
         label: { type: string }
+        description:
+          type: string
+          description: >-
+            Informational text shown near the field's input by schema-driven
+            forms (e.g. SchemaFieldsForm). Must be a string if present.
+        group:
+          type: string
+          description: >-
+            UI grouping label - fields sharing the same value are rendered
+            together under one heading, in schema order. Must be a string if
+            present.
         type:
           type: string
           enum: [string, number, boolean, date, url, enum, map]
@@ -118,12 +131,29 @@ components:
         searchable:
           type: boolean
           description: If true (string/url/enum types only), included in the resource's free-text search.
+        list_column:
+          type: boolean
+          description: >-
+            Only meaningful in an observable type's observer_config_schema /
+            observer_mechanism_schema: shows the field as an extra column in the
+            Observer Configs table when that type is the active filter. Defaults
+            to false.
         validations:
           type: object
           description: >-
             Allowed keys depend on `type`: string/url -> minLength, maxLength,
             pattern; number/date -> min, max; enum -> options (required,
             non-empty array of strings); boolean -> none.
+    ImportRowErrors:
+      type: array
+      description: One entry per import row that was skipped; empty when nothing failed.
+      items:
+        type: object
+        properties:
+          index: { type: integer, description: 1-based position of the row in the uploaded file's array }
+          name: { type: string, description: The row's `name`, when it has one }
+          message: { type: string }
+        required: [index, message]
     ObservableType:
       type: object
       properties:
@@ -368,6 +398,30 @@ components:
         enabled: { type: boolean }
         next_run_at: { type: string, nullable: true }
         last_run_at: { type: string, nullable: true }
+        created_at: { type: string }
+        updated_at: { type: string }
+    ObserverConfig:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        observable_type_id: { type: integer }
+        enabled: { type: boolean }
+        fields:
+          type: object
+          additionalProperties: true
+          description: >-
+            Field-extraction map keyed by field name, each value
+            `{selector: string[]}` or `{compute: string}` (plus optional
+            transform/validate/temporal). Must supply every field the
+            observable type's `observer_config_schema` marks required.
+        mechanism_config:
+          type: object
+          additionalProperties: true
+          description: >-
+            Observer-specific "how to reach the source" values (e.g.
+            urls_match, headers, ssl_verify), validated against the
+            observable type's `observer_mechanism_schema`.
         created_at: { type: string }
         updated_at: { type: string }
     NotificationPolicy:
@@ -810,6 +864,39 @@ paths:
         "200": { description: OK }
         "409": { description: One or more observables still use this observable type }
 
+  /api/observable_types/import:
+    post:
+      tags: [ObservableTypes]
+      summary: >-
+        Import observable types from a previously exported JSON file (`items`
+        array). A row that fails validation or insertion is skipped and
+        reported in `content.errors` (and counted in `content.failed`) rather
+        than aborting the whole import.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties: { file: { type: string, format: binary } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  content:
+                    type: object
+                    properties:
+                      items: { type: array, items: { $ref: "#/components/schemas/ObservableType" } }
+                      failed: { type: integer }
+                      errors: { $ref: "#/components/schemas/ImportRowErrors" }
+        "400": { description: File is missing }
+        "500": { description: "File content could not be decoded (body: `{ok: false, error}`)" }
+
   /api/observables:
     get:
       tags: [Observables]
@@ -894,6 +981,7 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
       responses:
         "200": { description: OK }
+        "404": { description: Not found }
 
   /api/observables/export:
     get:
@@ -909,7 +997,7 @@ paths:
         Import observables from a previously exported JSON file. A row whose
         properties fail validation against its observable_type_id is skipped
         and counted in the response's `failed` count rather than aborting
-        the whole import.
+        the whole import; each skipped row is described in `content.errors`.
       requestBody:
         content:
           multipart/form-data:
@@ -917,7 +1005,22 @@ paths:
               type: object
               properties: { file: { type: string, format: binary } }
       responses:
-        "200": { description: OK }
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  content:
+                    type: object
+                    properties:
+                      observables: { type: array, items: { $ref: "#/components/schemas/Observable" } }
+                      failed: { type: integer }
+                      errors: { $ref: "#/components/schemas/ImportRowErrors" }
+        "400": { description: File is missing }
+        "500": { description: "File content could not be decoded (body: `{ok: false, error}`)" }
 
   /api/observations:
     get:
@@ -1000,6 +1103,7 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
       responses:
         "200": { description: OK }
+        "404": { description: Not found }
 
   /api/alerts:
     get:
@@ -1046,7 +1150,7 @@ paths:
       tags: [Alerts]
       summary: Create an alert directly
       description: >-
-        Requires alerts:create (distinct from alerts:read/update/delete; the
+        Requires alerts:create (distinct from alerts:read/delete; the
         built-in admin and operator roles have it, viewer doesn't). A narrow, validating
         create for a caller that already decided a rule matched and already
         made its own cooldown decision - it performs no matching/cooldown
@@ -1078,7 +1182,7 @@ paths:
                 type: object
                 properties:
                   item: { $ref: "#/components/schemas/Alert" }
-        "400": { description: severity is not one of the allowed values }
+        "400": { description: severity is not one of the allowed values, or a field (e.g. tags) fails validation }
         "404": { description: observation not found }
 
   /api/alerts/{id}:
@@ -1200,6 +1304,7 @@ paths:
           content:
             text/yaml: { schema: { type: string, format: binary } }
             application/zip: { schema: { type: string, format: binary } }
+        "400": { description: "`ids` is not a comma-separated list of numeric ids" }
         "404": { description: No rules matched }
 
   /api/rules/import/preflight:
@@ -1366,6 +1471,35 @@ paths:
                 properties:
                   items: { type: array, items: { $ref: "#/components/schemas/Worker" } }
 
+  /api/workers/export:
+    get:
+      tags: [Workers]
+      summary: Download every worker matching the current filters/search/sort (unpaginated) as JSON or CSV
+      description: >-
+        Accepts the same filter/search/sort query params as `GET /api/workers`
+        (including `role`), but returns every match instead of one page.
+        Requires `workers:read`.
+      parameters:
+        - name: role
+          in: query
+          schema: { type: string, enum: [analyzer, observer, deliver, scheduler, evaluator] }
+          description: Filter to workers that declared this role in their last heartbeat's `roles`.
+        - { name: format, in: query, schema: { type: string, enum: [json, csv], default: json }, description: "`csv` returns a CSV file; anything else returns JSON." }
+      responses:
+        "200":
+          description: >-
+            A file download (`Content-Disposition: attachment; filename="workers_export_<date>.json|.csv"`).
+            CSV columns are worker_id, connection_type, version, capabilities, config,
+            uptime_seconds, roles, properties, last_seen_at, created_at, updated_at.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  description: { type: string, example: Workers }
+                  items: { type: array, items: { $ref: "#/components/schemas/Worker" } }
+            text/csv: { schema: { type: string } }
+
   /api/workers/{id}:
     get:
       tags: [Workers]
@@ -1413,6 +1547,35 @@ paths:
       responses:
         "202": { description: Heartbeat recorded }
         "400": { description: Unknown worker role, or properties failed validation against the declared roles' schemas }
+
+  /api/workers/{id}/events:
+    get:
+      tags: [Workers]
+      summary: Long-poll for a realtime "go claim now" wake signal (latency optimization only)
+      description: >-
+        Holds the request open (server-side, polling its wake counters every 0.2s) until
+        any requested key's counter exceeds its `since` value, or the wait cap elapses.
+        Carries no payload beyond `{key, seq}`; the caller still claims through its own
+        endpoint. It evaluates and decides nothing, and normal polling remains the
+        fallback. Requires `workers:write`, same as heartbeat. See
+        docs/dev/worker-configuration.md's "Realtime wake events" section.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: keys, in: query, required: true, schema: { type: string }, description: "Comma-separated wake keys, each one of `observe`, `analyze`, `notify`, `deliver`, `observer_test`." }
+        - { name: since, in: query, schema: { type: string }, description: "Comma-separated `key:seq` pairs the caller already knows (e.g. `observe:12,deliver:3`). A key not listed counts as 0." }
+        - { name: wait, in: query, schema: { type: number, default: 25, minimum: 0, maximum: 25 }, description: "Seconds to hold the request open; clamped to 0-25, 25 is also the default. 0 (or negative) is a single non-blocking check." }
+      responses:
+        "200":
+          description: A requested key's counter moved past its `since` value (the first such key found).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key: { type: string, enum: [observe, analyze, notify, deliver, observer_test] }
+                  seq: { type: integer }
+        "204": { description: No change within the wait window (empty body) }
+        "400": { description: "`keys` missing/empty, or contains an unknown wake key" }
 
   /api/workers/{id}/heartbeats:
     get:
@@ -1505,7 +1668,10 @@ paths:
         possible" (server defaults it to NOW()). `run_now: true` forces
         `next_run_at` to NOW() regardless of schedule_type, without altering
         `cron_expression`/`run_at` - a cron task fires once immediately and
-        then resumes its normal cadence. `run_now` is not persisted and
+        then resumes its normal cadence. `run_now: true` also forces
+        `enabled` to true (re-arming a disabled or already-fired one-shot
+        task); combining it with `enabled: false` is rejected with 400.
+        `run_now` is not persisted and
         never appears in the response.
       requestBody:
         required: true
@@ -1529,6 +1695,62 @@ paths:
         "201": { description: Created }
         "400": { description: Invalid cron expression, observable_ids not belonging to observable_type_id, unknown notify_policy_ids, etc. }
 
+  /api/scheduler/export:
+    get:
+      tags: [Scheduler]
+      summary: Export every scheduler task as a JSON download
+      description: >-
+        Requires `scheduler:read`. Returns `{description, items}` with a
+        `Content-Disposition: attachment` header
+        (`scheduler_tasks_export_<date>.json`). The file is accepted as-is
+        by POST /api/scheduler/import.
+      responses:
+        "200":
+          description: OK
+          headers:
+            Content-Disposition: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  description: { type: string }
+                  items: { type: array, items: { $ref: "#/components/schemas/SchedulerTask" } }
+
+  /api/scheduler/import:
+    post:
+      tags: [Scheduler]
+      summary: Import scheduler tasks from a previously exported JSON file
+      description: >-
+        Requires `scheduler:create`. Each item is validated like a
+        POST /api/scheduler create (id, next_run_at, last_run_at and
+        timestamps in an exported row are ignored); an item that fails
+        validation is skipped and counted in `content.failed` rather than
+        aborting the whole import.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties: { file: { type: string, format: binary } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  content:
+                    type: object
+                    properties:
+                      items: { type: array, items: { $ref: "#/components/schemas/SchedulerTask" } }
+                      failed: { type: integer }
+        "400": { description: File is missing }
+        "500": { description: File content could not be decoded }
+
   /api/scheduler/{id}:
     get:
       tags: [Scheduler]
@@ -1545,7 +1767,10 @@ paths:
         accepted here even if present in the body. `run_now: true` forces
         `next_run_at` to NOW() regardless of schedule_type, without altering
         `cron_expression`/`run_at` - a cron task fires once immediately and
-        then resumes its normal cadence. `run_now` is not persisted and
+        then resumes its normal cadence. `run_now: true` also forces
+        `enabled` to true (re-arming a disabled or already-fired one-shot
+        task); combining it with `enabled: false` is rejected with 400.
+        `run_now` is not persisted and
         never appears in the response.
       parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
       requestBody:
@@ -1828,6 +2053,40 @@ paths:
       responses:
         "202": { description: Error recorded }
 
+  /api/jobs/reap-stale:
+    put:
+      tags: [Jobs]
+      summary: Worker-facing housekeeping - reset stale in-flight jobs to error
+      description: >-
+        Requires `jobs:update`. Resets any job stuck in `triggering` (claimed
+        but never reported on) for longer than `timeout_seconds` back to
+        `error`, with `message` set and `retries` incremented - a claim whose
+        worker crashed, hung or lost connectivity would otherwise sit in
+        `triggering` forever and permanently block any future claim for that
+        same (worker_id, type, ref_id). The observable rollup is re-run for
+        every reaped row that isn't scheduler-fired (`from_scheduler=true`
+        rows are skipped, since their `ref_id` is a scheduler_tasks id). Run
+        periodically by "scheduler"-role workers; its alert_deliveries
+        counterpart is PUT /api/alert_deliveries/reap-stale.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                timeout_seconds: { type: integer, minimum: 1, nullable: true, description: "Default 300." }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reaped: { type: integer }
+                  items: { type: array, items: { $ref: "#/components/schemas/Job" } }
+        "400": { description: "`timeout_seconds` is not a positive integer" }
+
   /api/notification_channels:
     get:
       tags: [NotificationChannels]
@@ -1850,6 +2109,76 @@ paths:
       responses:
         "200": { description: Created }
 
+  /api/notification_channels/export:
+    get:
+      tags: [NotificationChannels]
+      summary: Export every notification channel as a JSON download
+      description: >-
+        Requires `channels:read`. Returns `{description, items}` with a
+        `Content-Disposition: attachment` header
+        (`notification_channels_export_<date>.json`). The file is accepted
+        as-is by POST /api/notification_channels/import.
+      responses:
+        "200":
+          description: OK
+          headers:
+            Content-Disposition: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  description: { type: string }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        name: { type: string }
+                        type: { type: string, enum: [discord, webhook] }
+                        options: { type: object }
+
+  /api/notification_channels/import:
+    post:
+      tags: [NotificationChannels]
+      summary: Import notification channels from a previously exported JSON file
+      description: >-
+        Requires `channels:create`. An item without `options`, or one whose
+        creation fails, is skipped and counted in `content.failed` rather
+        than aborting the whole import.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties: { file: { type: string, format: binary } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  content:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id: { type: integer }
+                            name: { type: string }
+                            type: { type: string, enum: [discord, webhook] }
+                            options: { type: object }
+                      failed: { type: integer }
+        "400": { description: File is missing }
+        "500": { description: File content could not be decoded }
+
   /api/notification_channels/{id}:
     get:
       tags: [NotificationChannels]
@@ -1863,6 +2192,7 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
       responses:
         "200": { description: OK }
+        "400": { description: Invalid request, or `type` differs from the channel's existing type (type is immutable after creation) }
     delete:
       tags: [NotificationChannels]
       summary: Delete a notification channel
@@ -1940,6 +2270,109 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
       responses:
         "200": { description: OK }
+
+  /api/notification_policies/export:
+    get:
+      tags: [NotificationPolicies]
+      summary: >-
+        Download matching notification policies (all, or `?ids=1,2,3`) as a
+        file - a single `.yaml` for exactly one matching policy, or a `.zip`
+        of one `.yaml` per policy for 2+. The response body is the raw file,
+        not JSON. Requires `policies:read`.
+      parameters:
+        - { name: ids, in: query, schema: { type: string }, description: "Comma-separated policy ids. Omit to export every policy." }
+      responses:
+        "200":
+          description: OK
+          headers:
+            Content-Disposition: { schema: { type: string } }
+          content:
+            text/yaml: { schema: { type: string, format: binary } }
+            application/zip: { schema: { type: string, format: binary } }
+        "400": { description: "`ids` is not a comma-separated list of numeric ids" }
+        "404": { description: No notification policies matched }
+
+  /api/notification_policies/import/preflight:
+    post:
+      tags: [NotificationPolicies]
+      summary: >-
+        Parses and validates an uploaded policy file or zip of policy files
+        without saving anything. Requires `policies:create`. A zip is
+        detected by its magic bytes, not the filename/extension. Each
+        candidate is validated the same way POST/PUT
+        /api/notification_policies validates `source`; a name collision with
+        an existing policy is reported as `conflict` for the caller to
+        resolve before calling POST /api/notification_policies/import.
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties: { file: { type: string, format: binary } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        file: { type: string }
+                        name: { type: string }
+                        source: { type: string }
+                        error: { type: string, description: Set instead of name/source if this candidate failed validation. }
+                        conflict:
+                          type: object
+                          nullable: true
+                          properties: { id: { type: integer }, name: { type: string } }
+        "400": { description: File missing, or the upload isn't a valid zip }
+
+  /api/notification_policies/import:
+    post:
+      tags: [NotificationPolicies]
+      summary: >-
+        Commits a client-resolved decision array from a prior preflight.
+        Requires both `policies:create` and `policies:update`, since one
+        batch can do either. Each item is processed independently (one bad
+        item doesn't abort the rest) via the same validation as POST/PUT
+        /api/notification_policies.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    type: object
+                    required: [source, action]
+                    properties:
+                      source: { type: string }
+                      action: { type: string, enum: [create, update] }
+                      existing_id: { type: integer, description: Required when action is "update". }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        ok: { type: boolean }
+                        error: { type: string, nullable: true }
+        "400": { description: "`items` is not an array" }
 
   /api/notification_policies/test:
     post:
@@ -2112,3 +2545,357 @@ paths:
                   reaped: { type: integer }
                   items: { type: array, items: { $ref: "#/components/schemas/AlertDelivery" } }
 
+
+  /api/observer_configs:
+    get:
+      tags: [ObserverConfigs]
+      summary: List observer configs
+      description: Requires `observer_configs:read`.
+      parameters:
+        - { name: from, in: query, schema: { type: integer } }
+        - { name: size, in: query, schema: { type: integer } }
+        - { name: enabled, in: query, schema: { type: string, enum: [true, false] } }
+        - { name: observable_type_id, in: query, schema: { type: integer } }
+        - { name: id, in: query, schema: { type: integer } }
+        - { name: name, in: query, schema: { type: string } }
+        - { name: search, in: query, schema: { type: string }, description: "Matches `name`." }
+        - { name: sort, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/ObserverConfig" } }
+                  total_items: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [ObserverConfigs]
+      summary: Create an observer config
+      description: >-
+        Requires `observer_configs:create`. `fields` and `mechanism_config`
+        are validated against the target observable type's
+        `observer_config_schema`/`observer_mechanism_schema`. `enabled`
+        defaults to true.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, observable_type_id, fields, mechanism_config]
+              properties:
+                name: { type: string }
+                observable_type_id: { type: integer }
+                fields: { type: object, additionalProperties: true }
+                mechanism_config: { type: object, additionalProperties: true }
+                enabled: { type: boolean, default: true }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  message: { type: string }
+                  item: { $ref: "#/components/schemas/ObserverConfig" }
+        "400": { description: Unknown observable_type_id, or fields/mechanism_config failed validation }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { description: Database error while inserting }
+
+  /api/observer_configs/{id}:
+    put:
+      tags: [ObserverConfigs]
+      summary: Update an observer config
+      description: >-
+        Requires `observer_configs:update`. Full replacement of the
+        validated fields - the body has the same shape as create, and
+        `observable_type_id` is required (and may be changed).
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, observable_type_id, fields, mechanism_config]
+              properties:
+                name: { type: string }
+                observable_type_id: { type: integer }
+                fields: { type: object, additionalProperties: true }
+                mechanism_config: { type: object, additionalProperties: true }
+                enabled: { type: boolean, default: true }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  message: { type: string }
+                  item: { $ref: "#/components/schemas/ObserverConfig" }
+        "400": { description: Invalid id, unknown observable_type_id, or fields/mechanism_config failed validation }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { description: Not found }
+    delete:
+      tags: [ObserverConfigs]
+      summary: Delete an observer config
+      description: Requires `observer_configs:delete`.
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  message: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { description: Not found }
+
+  /api/observer_configs/export:
+    get:
+      tags: [ObserverConfigs]
+      summary: Export every observer config as a JSON download
+      description: >-
+        Requires `observer_configs:read`. Returns
+        `{description, items}` with a `Content-Disposition: attachment`
+        header (`observer_configs_export_<date>.json`), ordered by name.
+        The file is accepted as-is by POST /api/observer_configs/import.
+      responses:
+        "200":
+          description: OK
+          headers:
+            Content-Disposition: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  description: { type: string }
+                  items: { type: array, items: { $ref: "#/components/schemas/ObserverConfig" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/observer_configs/import:
+    post:
+      tags: [ObserverConfigs]
+      summary: Import observer configs from a previously exported JSON file
+      description: >-
+        Requires `observer_configs:create`. Each item is validated like a
+        create; an item that fails validation or insertion is skipped and
+        counted in `content.failed` rather than aborting the whole import.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties: { file: { type: string, format: binary } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  content:
+                    type: object
+                    properties:
+                      items: { type: array, items: { $ref: "#/components/schemas/ObserverConfig" } }
+                      failed: { type: integer }
+        "400": { description: "File is missing, or its content could not be decoded (decode failure body: `{ok: false, error}`)" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/observer_configs/test:
+    post:
+      tags: [ObserverConfigs]
+      summary: Test an unsaved observer config (async)
+      description: >-
+        Requires `observer_configs:create`. Nothing is observed in the
+        request: it only records an `observer_config_test_requests` row and
+        returns its id (202). A worker claims it via
+        PUT /api/observer_configs/test_requests/pending as a
+        `type='observer_test'` job and runs the observe; poll
+        GET /api/jobs/for/observer_test/{id} (see /api/jobs/for/{type}/{ref_id})
+        for the outcome. `fields`/`mechanism_config` are validated exactly
+        as on create, and `properties` against the observable type's
+        `properties` schema (the type must have a url-typed property, which
+        supplies the URL to observe).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, observable_type_id, fields, mechanism_config, properties]
+              properties:
+                name: { type: string }
+                observable_type_id: { type: integer }
+                fields: { type: object, additionalProperties: true }
+                mechanism_config: { type: object, additionalProperties: true }
+                properties: { type: object, additionalProperties: true, description: "Sample Observable property values to test against." }
+      responses:
+        "202":
+          description: Test request recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer, description: "observer_config_test_requests id - the `ref_id` of the resulting observer_test job." }
+        "400": { description: Unknown observable type, fields/mechanism_config/properties failed validation, or the type has no url-typed property }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/observer_configs/{id}/test:
+    post:
+      tags: [ObserverConfigs]
+      summary: Test a saved observer config (async)
+      description: >-
+        Requires `observer_configs:create`. Same async flow as
+        POST /api/observer_configs/test (202 + request id, worker runs an
+        `observer_test` job, poll GET /api/jobs/for/observer_test/{id}). If
+        `fields` and/or `mechanism_config` are supplied (an edit form's
+        unsaved state) those are tested instead of what is persisted;
+        omit both to test the saved config as-is.
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [properties]
+              properties:
+                properties: { type: object, additionalProperties: true, description: "Sample Observable property values to test against." }
+                fields: { type: object, additionalProperties: true }
+                mechanism_config: { type: object, additionalProperties: true }
+      responses:
+        "202":
+          description: Test request recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+        "400": { description: Invalid id, unknown observable type, or fields/mechanism_config/properties failed validation }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { description: Observer config not found }
+
+  /api/observer_configs/test/_all:
+    post:
+      tags: [ObserverConfigs]
+      summary: Test every enabled observer config of an observable type (async)
+      description: >-
+        Requires `observer_configs:create`. Same async flow as
+        POST /api/observer_configs/test (202 + request id, worker runs an
+        `observer_test` job, poll GET /api/jobs/for/observer_test/{id}),
+        recorded in `mode: all` so the worker tries the sample against
+        every enabled config of `observable_type_id`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [observable_type_id, properties]
+              properties:
+                observable_type_id: { type: integer }
+                properties: { type: object, additionalProperties: true, description: "Sample Observable property values to test against." }
+      responses:
+        "202":
+          description: Test request recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+        "400": { description: Unknown observable type, properties failed validation, or the type has no url-typed property }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/observer_configs/test_requests/pending:
+    put:
+      tags: [ObserverConfigs]
+      summary: Worker-facing claim of the oldest unclaimed observer config test request
+      description: >-
+        Requires `workers:write` and `jobs:create`. Atomically (FOR UPDATE SKIP LOCKED, in one
+        transaction) picks the oldest test request that has no
+        `type='observer_test'` job yet and inserts that job for
+        `worker_id` with status `triggering` - so the claim is durable. The
+        worker then reports the outcome via
+        PUT /api/jobs/observer_test/{ref_id}/{status} (ref_id = `item.id`),
+        which the caller sees through GET /api/jobs/for/observer_test/{id}.
+        `item` is null when nothing is pending.
+      parameters:
+        - { name: worker_id, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  item:
+                    type: object
+                    nullable: true
+                    properties:
+                      id: { type: integer }
+                      config:
+                        type: object
+                        additionalProperties: true
+                        description: >-
+                          `{mode: adhoc|saved|all, ...}` - the resolved
+                          fields/mechanism_config/properties for adhoc,
+                          `observer_config_id` + properties for saved,
+                          observable_type_id + properties for all.
+                      test_url: { type: string }
+        "400": { description: worker_id is missing }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/observer_configs/targets:
+    get:
+      tags: [ObserverConfigs]
+      summary: Worker-facing list of enabled observer configs, as generic observer "targets"
+      description: >-
+        Requires `workers:write` (not `observer_configs:read`, which is for the admin-facing
+        routes). Used by a standalone worker's
+        `targets_source = "remote"` observer. Only enabled configs of
+        `observable_type_id`, ordered by name, each as
+        `{id, name, fields, mechanism_config}`; the worker-side observer plugin
+        reshapes them into its own target shape.
+      parameters:
+        - { name: observable_type_id, in: query, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { type: object, additionalProperties: true } }
+        "400": { description: observable_type_id missing or no such observable type }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }

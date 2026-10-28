@@ -1,7 +1,7 @@
 -- Jobs: one row per work-assignment attempt on a (worker, type, ref_id)
 -- target - the worker-facing report/ack/error protocol a worker uses to
 -- record observe progress, plus the read-side list/stats views. Generalized
--- with a `type` dimension (see config/dataset/init.sql's comment on
+-- with a `type` dimension (see server/dataset/schema.sql's comment on
 -- jobs.type) and per-type rollup targets (see services/jobs.lua).
 local db = require("lapis.db")
 local models = require("models")
@@ -32,7 +32,7 @@ function Plugin.setup(app, deps)
   local require_auth = auth:with({ require = true })
 
   -- Rollup target for type='observe': observables' own last_observe_* columns
-  -- (see config/dataset/init.sql). type='analyze'/'notify' have no
+  -- (see server/dataset/schema.sql). type='analyze'/'notify' have no
   -- registered target yet - see jobs.lua's M.new header comment.
   --
   -- remove_fields_on_update strips `properties` from the update payload:
@@ -72,7 +72,7 @@ function Plugin.setup(app, deps)
       "type",
       "status",
       "ref_id",
-      -- ref_id is polymorphic (see config/dataset/init.sql's comment on
+      -- ref_id is polymorphic (see server/dataset/schema.sql's comment on
       -- jobs.type/from_scheduler): resolves through scheduler_tasks for a
       -- scheduler-fired row, through observables for an ordinary per-observable one -
       -- from_scheduler is what disambiguates which join applies.
@@ -154,6 +154,36 @@ function Plugin.setup(app, deps)
     end)
   )
 
+  -- Must stay registered BEFORE the `:status` wildcard route below: both
+  -- patterns have the same segment shape (/:type/:ref_id/<seg>), and Lapis
+  -- matches equal-precedence routes in registration order, so registering
+  -- this after `:status` would let that handler swallow every `/error` PUT
+  -- (same reasoning as `/export` and `/stats` preceding `/:id` above).
+  app:put(
+    base_path .. "/:type/:ref_id/error",
+    compose(
+      require_auth,
+      rbac:with(perms.JOBS_UPDATE),
+      with_json_body({
+        { "worker_id", types.valid_text },
+        { "message", types.empty + types.valid_text },
+        -- See the :status route's identical param above.
+        { "skip_rollup", types.empty + types.boolean },
+      }),
+      with_error_handling("Failed to record job error", "Failed to record job error")
+    )(function(self)
+      local job, rollup_target = job_manager:report_error(
+        self.params.type,
+        self.params.ref_id,
+        self.params.worker_id,
+        self.params.message,
+        self.params.skip_rollup
+      )
+
+      return { status = 202, json = { message = "Error recorded", item = job, rollup = rollup_target } }
+    end)
+  )
+
   -- Worker-facing report protocol: a job is lazily created on its first
   -- report, upserted in place by (worker_id, type, ref_id) only while it
   -- stays "triggering" (see services/jobs.lua:report / jobs_active_unique_idx)
@@ -203,31 +233,6 @@ function Plugin.setup(app, deps)
       )
 
       return { status = 202, json = { message = "Status changed", item = job, rollup = rollup_target } }
-    end)
-  )
-
-  app:put(
-    base_path .. "/:type/:ref_id/error",
-    compose(
-      require_auth,
-      rbac:with(perms.JOBS_UPDATE),
-      with_json_body({
-        { "worker_id", types.valid_text },
-        { "message", types.empty + types.valid_text },
-        -- See the :status route's identical param above.
-        { "skip_rollup", types.empty + types.boolean },
-      }),
-      with_error_handling("Failed to record job error", "Failed to record job error")
-    )(function(self)
-      local job, rollup_target = job_manager:report_error(
-        self.params.type,
-        self.params.ref_id,
-        self.params.worker_id,
-        self.params.message,
-        self.params.skip_rollup
-      )
-
-      return { status = 202, json = { message = "Error recorded", item = job, rollup = rollup_target } }
     end)
   )
 

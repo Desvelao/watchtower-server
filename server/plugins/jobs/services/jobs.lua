@@ -41,10 +41,23 @@ end
 -- is none, INSERT a fresh one; then load the row and (unless `skip_rollup`)
 -- roll it up onto its type's target. `update_sql`/`insert_sql` are format
 -- strings taking the table name (%s), each with its own positional
--- parameter array. Runs in one transaction. Returns (job, rollup_target).
-function M:_record_in_flight(type_, ref_id, skip_rollup, update_sql, update_params, insert_sql, insert_params)
+-- parameter array. Runs in one transaction, which first takes a transaction-
+-- scoped advisory lock keyed on (worker_id, type, ref_id): without it, two
+-- concurrent callers for the same brand-new target would both miss the UPDATE
+-- and both INSERT a 'triggering' row, one of them dying on
+-- jobs_active_unique_idx. With it the second caller waits for the first to
+-- commit, then (READ COMMITTED) its UPDATE sees the committed row. Returns
+-- (job, rollup_target).
+function M:_record_in_flight(type_, ref_id, worker_id, skip_rollup, update_sql, update_params, insert_sql, insert_params)
   return route_helpers.with_transaction(function()
     local t = self._model:table_name()
+
+    db.query(
+      "SELECT pg_advisory_xact_lock(hashtext(? || ':' || ? || ':' || ?))",
+      tostring(worker_id),
+      tostring(type_),
+      tostring(ref_id)
+    )
 
     local rows = db.query(string.format(update_sql, t), unpack(update_params))
     if not rows[1] then
@@ -106,7 +119,7 @@ end
 -- for `triggering` reports). `message` carries the longer-form detail
 -- behind that action, and is also what `report_error` writes on the
 -- failure path. `result` is an arbitrary JSON payload (only type='test'
--- passes one today - see config/dataset/init.sql's comment on
+-- passes one today - see server/dataset/schema.sql's comment on
 -- jobs.result). All three are only written when non-nil, so a later report
 -- that omits one doesn't erase a previously-recorded value.
 --
@@ -140,6 +153,7 @@ function M:report(type_, ref_id, worker_id, status, action, message, result, ski
   return self:_record_in_flight(
     type_,
     ref_id,
+    worker_id,
     skip_rollup,
     [[
       UPDATE %s SET
@@ -180,7 +194,7 @@ function M:report(type_, ref_id, worker_id, status, action, message, result, ski
 end
 
 -- Records that `worker_id` hit a local failure for this (type, ref_id)
--- (e.g. the observe failed - a site/network problem, not a
+-- (e.g. the observe failed - a target/network problem, not a
 -- server-communication problem, since the worker successfully reached
 -- the server to report this). Sets `status` to "error" alongside
 -- `error_at` and `message` (the reported failure reason), and always
@@ -210,6 +224,7 @@ function M:report_error(type_, ref_id, worker_id, message, skip_rollup)
   return self:_record_in_flight(
     type_,
     ref_id,
+    worker_id,
     skip_rollup,
     [[
       UPDATE %s SET
@@ -287,7 +302,7 @@ end
 
 -- Resets any 'triggering' row whose `taken_at` is older than
 -- `timeout_seconds` back to 'error' - see jobs_active_unique_idx's own
--- comment in config/dataset/init.sql. A claim whose worker crashed, hung,
+-- comment in server/dataset/schema.sql. A claim whose worker crashed, hung,
 -- or lost connectivity before ever reporting would otherwise sit in
 -- 'triggering' forever, permanently blocking any future claim for that same
 -- (worker_id, type, ref_id) - this is the only thing that ever moves such a
@@ -348,7 +363,7 @@ end
 -- purpose - this is a plain GROUP BY over `jobs`, pivoted in Lua into one
 -- row per worker: { worker_id, total, by_status = {status = count} }.
 -- A NULL worker_id - a scheduler-queued job not yet claimed by anyone, see
--- jobs' own worker_id column comment in config/dataset/init.sql - is a
+-- jobs' own worker_id column comment in server/dataset/schema.sql - is a
 -- routine, non-rare state, not something to drop from this response: it's
 -- surfaced under the sentinel worker_id UNASSIGNED_WORKER_ID rather than
 -- left as a real Lua nil, since nil can't be used as a table key here

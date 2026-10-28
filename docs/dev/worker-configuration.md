@@ -10,7 +10,7 @@ name) and mode-specific defaults on top. `watchtower_worker_core` is a
 publishable library and never calls `os.getenv` itself — each entry point
 resolves its own env vars and assembles the `env` table it passes in. A
 missing/unreadable `WORKER_CONFIG_FILE` is not an error — every field just
-falls back to its default (or, for `server`/`sites`, is simply absent). One
+falls back to its default (or, for `server`/`targets`, is simply absent). One
 default is worth calling out: `plugins` falls back to `{}`, so a worker with
 no `WORKER_CONFIG_FILE` at all (or one that doesn't set `plugins`) loads only
 the five built-in role plugins and no observer type — nothing observes until
@@ -77,7 +77,7 @@ retry value.
 | `server.address`                                                                                                                                                                   | —                                                     | standalone only                                        | Base URL of the server, e.g. `http://server:8080`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `server.batch_size`                                                                                                                                                                | `10`                                                  | standalone only                                        | Observables fetched per `GET /api/observables` page.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `server.api_key`                                                                                                                                                                   | —                                                     | standalone only                                        | Least-secure of the three ways to supply the key (see below) — only reasonable in a gitignored, tightly-permissioned file.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `LOG_LEVEL` (env only)                                                                                                                                                             | `info`                                                | standalone only                                        | `debug`/`info`/`warn`/`error`. `debug` additionally logs every HTTP request and full response body the worker makes, which can include secrets (a claimed delivery batch carries channel configs such as webhook URLs) — only enable it while debugging, never in shared logs.                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `log_level` / `LOG_LEVEL`                                                                                                                                                          | `info`                                                | standalone only                                        | `debug`/`info`/`warn`/`error`. `LOG_LEVEL` env var (checked first) overrides `log_level` in the config file if both are set. `debug` additionally logs every HTTP request and full response body the worker makes, which can include secrets (a claimed delivery batch carries channel configs such as webhook URLs) — only enable it while debugging, never in shared logs.                                                                                                                                                                                                                                                                                                                                                                |
 
 ### `observer`
 
@@ -89,7 +89,7 @@ retry value.
 | `observer.observe.enabled`                  | `true`                        | both                              | Independent enable/disable for the main observe task itself, on top of declaring `"observer"` in `roles` above (standalone) — see "Dedicating a worker to observing vs. testing" below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `observer.test_poll.enabled`                | `true`                        | both                              | Independent enable/disable for the ad-hoc `observer_config_test_poll` task (services `POST /api/observer_configs/test` and friends). Unlike `observer.observe` above, this task has never depended on `"observer"` being in `roles` at all — only this flag and whether an observer-type plugin providing this task is loaded (`plugins` above) gate it. See "Dedicating a worker to observing vs. testing" below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `observer.test_poll.interval`          | root `interval` fallback | both                              | This task's own dedicated cadence, independent of both the shared root `interval` and `observer.interval` above (which it silently reused before this field existed). Lets it run on a different cadence than the main flow from the same worker process — see "Dedicating a worker to observing vs. testing" and "Run styles" below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `observer.observers`                        | —                             | standalone only                  | Array of `{id, type, observable_type, ...type-specific fields}` — routes observables of one server-side `observable_types.name` to one observer implementation. `id`/`type`/`observable_type` are the only fields this array itself defines; every other field an entry needs (and any state it refreshes on its own cadence) is entirely up to that entry's `type` — see that observer-type plugin's own documentation. Which observer implementation applies for a given observable type isn't configured here at all (see `server/lib/observer_type_catalog.lua`'s header comment) — it's resolved server-side, independent of which observer-type plugins a given worker happens to have loaded. `observable_type` (and any `observable_type_id`-shaped field a type declares) is purely worker-local config; the server has no notion of this mapping beyond validating an id-shaped field itself, if that type uses one. The embedded worker ignores this key entirely: it builds one observer per enabled `observable_type_id` found in `observer_configs` (already in-process, no HTTP round trip needed) — an observable type with no enabled `observer_configs` row simply gets no observer, a safe no-op. An observer `type` becomes available by naming its plugin module in the root `plugins` field above — required at worker boot, it registers itself into that build's own observer-type registry (`shared/watchtower_worker_core/observer_registry.lua`), so a third-party observer type needs no changes to this repo's worker entry points, only a `plugins` entry naming it; see `shared/watchtower_worker_core/README.md`'s "Writing a new observer type" section. |
+| `observer.observers`                        | —                             | standalone only                  | Array of `{id, type, observable_type, ...type-specific fields}` — routes observables of one server-side `observable_types.name` to one observer implementation. `id`/`type`/`observable_type` are the only fields this array itself defines; every other field an entry needs (and any state it refreshes on its own cadence) is entirely up to that entry's `type` — see that observer-type plugin's own documentation. The server itself knows nothing about observer types; which implementation handles an observable type is just this array's `type`/`observable_type` pairing (the embedded worker instead resolves an entry with no `type` to the one observer type its loaded plugin registered). `observable_type` (and any `observable_type_id`-shaped field a type declares) is purely worker-local config; the server has no notion of this mapping beyond validating an id-shaped field itself, if that type uses one. The embedded worker ignores this key entirely: it builds one observer per enabled `observable_type_id` found in `observer_configs` (already in-process, no HTTP round trip needed) — an observable type with no enabled `observer_configs` row simply gets no observer, a safe no-op. An observer `type` becomes available by naming its plugin module in the root `plugins` field above — required at worker boot, it registers itself into that build's own observer-type registry (`shared/watchtower_worker_core/observer_registry.lua`), so a third-party observer type needs no changes to this repo's worker entry points, only a `plugins` entry naming it; see `shared/watchtower_worker_core/README.md`'s "Writing a new observer type" section. |
 
 ### `scheduler`
 
@@ -122,16 +122,44 @@ retry value.
 | `evaluator.reap_stale.timeout_seconds` | `300`                         | both                             | How long an `alert_deliveries` row may sit in `'triggering'` without a report before it's considered stale and reaped. Without this, a claim whose "deliver"-role worker crashed/hung/lost connectivity mid-send would sit in `'triggering'` forever, never sent and never retried (only an `'error'` row gets reset to `'pending'` by the next enqueue pass). Same role-gating as `evaluator.reap_stale.interval`.                                                                                                                                                                                                                                                                                                     |
 | `evaluator.run_on_start`               | root `run_on_start` fallback  | standalone only, `mode = "loop"` | Overrides the shared root `run_on_start` just for this role's own tasks — applies to BOTH the evaluate task and `reap_stale_deliveries` (one value per role, not per task name).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
+### `events`
+
+| Field                    | Default | Applies to       | Notes                                                                                                                                                                                                                                    |
+| ------------------------ | ------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `events.enabled`         | `true`  | standalone only   | Explicit off-switch for this whole task, independent of which roles/source modes this worker declares — e.g. while debugging, or on a worker where the extra long-lived HTTP connection isn't wanted.                                  |
+| `events.wait`            | `25`    | standalone only   | Seconds each long-poll call (`GET /api/workers/:id/events`) waits before returning with nothing new — capped server-side at 25 regardless of what's set here. See "Realtime wake events" below.                                        |
+| `events.retry_interval`  | `5`     | standalone only   | Retry backoff after a failed poll (network error, non-2xx). A successful poll is always re-issued immediately, so this is only ever consulted on failure — same role `heartbeat_retry_interval` plays for the heartbeat task.           |
+
+Beyond the on/off switch, there's nothing else to configure per role: this
+worker figures out on its own, from `roles`/each role's `source` and
+`observer.test_poll.enabled` above, which wake keys it needs — see "Realtime
+wake events" below.
+
 The embedded worker ignores `server`/`observer.observers` entirely — it talks
-to the database directly, not over the HTTP API, and reads site configs
+to the database directly, not over the HTTP API, and reads target configs
 directly from `observer_configs` (any enabled `observable_type_id`).
 
 The standalone worker's API key additionally needs `observable_types:read` (it
 calls `GET /api/observable_types/:id` to resolve each observable's observable type before
 dispatching an observe), on top of whatever `observables:*`/`observations:*`/
 `jobs:*`/`workers:*` permissions it already needs. Any observer using
-`sites_source = "remote"` needs `observer_configs:read` too (it calls
-`GET /api/observer_configs/site`).
+`targets_source = "remote"` calls `GET /api/observer_configs/targets`, which is
+gated on `workers:write` (already held by every worker key) - not
+`observer_configs:read`. A key that relied on `observer_configs:read` alone for
+this route now gets a 403.
+
+**Migration note (legacy "site" terminology removed):** the observer config keys
+and route were renamed from "site" to "target"; existing `WORKER_CONFIG_FILE`s
+must be updated (no compatibility shim): `sites_source` -> `targets_source`,
+`sites` -> `targets`, `remote_sites_refresh_interval` ->
+`remote_targets_refresh_interval`, and `GET /api/observer_configs/site` ->
+`GET /api/observer_configs/targets`. An externally installed observer plugin
+that reads the old names must be updated
+to match.
+
+The ad-hoc observer config test poller (`PUT /api/observer_configs/test_requests/pending`)
+creates a `jobs` row when it claims a request, so it needs `jobs:create` as well as
+`workers:write`.
 
 ## Analyzer, evaluator, and deliver roles
 
@@ -159,7 +187,7 @@ report per firing) — see `shared/watchtower_worker_core/pollers/analyze.lua`/
   `GET /api/observable_types/:id`, `GET /api/observations?observable_id=`,
   `GET /api/alerts?rule_id=&observable_id=&created_after=` for the cooldown
   check) and one narrow write endpoint, `POST /api/alerts` (permission
-  `alerts:create`, distinct from `alerts:read`/`update`/`delete`; the
+  `alerts:create`, distinct from `alerts:read`/`delete`; the
   built-in `admin` and `operator` roles have it, `viewer` doesn't — see `server/plugins/alerting/
 plugin.lua`'s own header comment for why this is a validating create, not
   a general alerts write API: the worker's own cooldown decision is final,
@@ -568,15 +596,45 @@ from the `analyzer`/`observer`/`deliver` roles' own logic:
 - This role also owns the `jobs` queue's stale-job housekeeping — see
   `scheduler.reap_stale.*` in the Fields table above.
 
-A remote-fetch failure at startup (`sites_source = "remote"`, network
-error or missing `observer_configs:read`) raises immediately, matching
+A remote-fetch failure at startup (`targets_source = "remote"`, network
+error or missing `workers:write`) raises immediately, matching
 `observer_registry`'s own construction-time-failure philosophy — same
 treatment as an unknown observer `type` or a duplicate `observable_type`
 mapping in `observer.observers`. Fix the config/permission and restart; there's no
 retry loop around observer construction on the standalone worker (the
-embedded worker's own always-on remote-sites observer does retry, once,
-by falling back to an empty site list rather than aborting startup —
+embedded worker's own always-on remote-targets observer does retry, once,
+by falling back to an empty target list rather than aborting startup —
 see `server/workers/observe_pending_worker.lua`'s `build_observer_registry`).
+
+## Realtime wake events
+
+Every claim-based role above (`observer` in `"queue"` mode, `analyzer` in
+`"queue"` mode, `evaluator` in `"queue"` mode, `deliver` in `"deliveries"`
+mode, and the ad-hoc observer-config test poller) normally learns about new
+work by polling on its own `interval`. On top of that, this worker also
+long-polls `GET /api/workers/:id/events` (`shared/watchtower_worker_core/plugins/events.lua`) — a
+route the server holds open (up to `events.wait` seconds) until a small,
+fixed set of counters changes (`server/lib/wake_events.lua`, backed by an
+nginx `lua_shared_dict`), bumped by whichever route just created a new
+claimable row: `POST /api/observer_configs/test` and friends, a
+scheduler-fired `jobs` row (`fire_due`), or a newly enqueued
+`alert_deliveries` row. On a wake, this worker immediately re-runs the
+relevant role's own task early instead of waiting out its `interval`.
+
+This is strictly a latency optimization, never a replacement for the normal
+polling — the wake carries no payload of its own, only "something changed
+for this key", and the woken role still claims through the exact same
+endpoint it always has. A dropped/missed wake (a network blip, the long-poll
+between calls) just means "back to today's polling latency", since every
+role's own `interval` keeps running regardless. No new permission is needed:
+the route reuses `workers:write`, same as the heartbeat/scheduler/delivery
+routes above.
+
+The embedded worker doesn't poll itself — its own role ticks already run
+in-process — but it still reads the same `wake_events` shared dict directly
+(`server/workers/observe_pending_worker.lua`'s own cross-process fan-in),
+since its `ngx.timer.every` ticks all live in one nginx worker process while
+the route that bumps a key can be served by any of them.
 
 ## The server API key (standalone only)
 

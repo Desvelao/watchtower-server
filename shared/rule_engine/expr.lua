@@ -125,7 +125,7 @@
 -- `<=` instead rank both sides through the application's semantic
 -- low<medium<high<critical ordering (`SEVERITY_RANK`/`compare_severity`
 -- below, mirroring the DB's generated `severity_value` column exactly -
--- see config/dataset/init.sql), so `severity > "high"` means what an
+-- see server/dataset/schema.sql), so `severity > "high"` means what an
 -- author expects rather than a byte-wise string comparison.
 
 local cjson_safe = require("cjson.safe")
@@ -154,7 +154,7 @@ local KEYWORDS = {
 local ORDINAL_OPS = { [">"] = true, ["<"] = true, [">="] = true, ["<="] = true }
 
 -- Mirrors the DB's generated `severity_value` column exactly (see
--- config/dataset/init.sql's `alerts` table) - used by `compare_severity`
+-- server/dataset/schema.sql's `alerts` table) - used by `compare_severity`
 -- below so `severity>`/`<`/`>=`/`<=` rank low<medium<high<critical instead
 -- of comparing bytes.
 local SEVERITY_RANK = { low = 1, medium = 2, high = 3, critical = 4 }

@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, onUnmounted, ref, watch } from "vue";
 import { HTTPError } from "../../services/api/http";
+import PasswordInput from "./PasswordInput.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -60,12 +61,12 @@ async function submit() {
       <h2 class="text-base font-semibold text-slate-900 dark:text-slate-100">{{ title }}</h2>
       <form class="mt-3" @submit.prevent="submit">
         <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">New password</label>
-        <input
+        <PasswordInput
           v-model="password"
-          type="password"
           required
           autofocus
-          class="mt-1 w-full rounded border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
+          wrapper-class="mt-1"
+          class="w-full rounded border border-slate-300 py-1.5 pl-3 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
         />
         <p v-if="error" class="mt-2 text-sm text-red-600 dark:text-red-400">{{ error }}</p>
         <div class="mt-5 flex justify-end gap-2">

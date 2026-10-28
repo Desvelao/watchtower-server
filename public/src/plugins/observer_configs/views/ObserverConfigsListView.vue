@@ -6,6 +6,7 @@ import { useObservableTypesStore } from '../../../stores/observableTypes';
 import { useAuthStore } from '../../../stores/auth';
 import DataTable from '../../../components/common/DataTable.vue';
 import ConfirmDialog from '../../../components/common/ConfirmDialog.vue';
+import EnabledBadge from '../../../components/common/EnabledBadge.vue';
 import ObserverConfigDetailsFlyout from '../components/ObserverConfigDetailsFlyout.vue';
 import IconEdit from '../../../components/common/icons/IconEdit.vue';
 import IconDelete from '../../../components/common/icons/IconDelete.vue';
@@ -252,7 +253,9 @@ async function onImportChange(event) {
       </template>
 
       <template #cell-observable_type_id="{ value }">{{ observableTypeLabel(value) }}</template>
-      <template #cell-enabled="{ value }">{{ value ? 'Yes' : 'No' }}</template>
+      <template #cell-enabled="{ value }">
+        <EnabledBadge :enabled="value" />
+      </template>
       <template #cell-created_at="{ value }">{{ formatDate(value) }}</template>
 
       <template #row-actions="{ item }">

@@ -4,6 +4,7 @@ local password_hash = require("plugins.security.services.password_hash")
 local cjson = require("cjson")
 local zip_writer = require("lib.zip_writer")
 local zip_reader = require("lib.zip_reader")
+local PERMS = require("plugins.security.permissions")
 
 local M = {}
 
@@ -94,6 +95,34 @@ function M:_derive(params, is_create)
   return row, nil
 end
 
+-- An "administrator" is an enabled user whose role's live permissions (same
+-- source rbac.lua enforces against) include USERS_UPDATE - so this holds for
+-- custom roles too, not just the literal "admin" role.
+function M:_is_admin(user_row)
+  if user_row.enabled == false then
+    return false
+  end
+  return self:_role_grants_admin(user_row.role_id)
+end
+
+function M:_role_grants_admin(role_id)
+  for _, perm in ipairs(self._roles:get_permissions(role_id)) do
+    if perm == PERMS.USERS_UPDATE then
+      return true
+    end
+  end
+  return false
+end
+
+function M:_other_admin_exists(excluding_id)
+  for _, other in ipairs(self._model:select("where id <> ?", excluding_id)) do
+    if self:_is_admin(other) then
+      return true
+    end
+  end
+  return false
+end
+
 function M:list(request)
   local fields_query_params = {
     "id",
@@ -174,6 +203,13 @@ function M:update(id, params)
   end
   row.updated_at = db.format_date()
 
+  if self:_is_admin(item) then
+    local still_admin = row.enabled ~= false and self:_role_grants_admin(row.role_id or item.role_id)
+    if not still_admin and not self:_other_admin_exists(id) then
+      return nil, "Cannot disable or demote the last administrator"
+    end
+  end
+
   local ok, ok_update = pcall(function()
     return item:update(row)
   end)
@@ -220,6 +256,9 @@ function M:delete(id)
   local item = self._model:find({ id = id })
   if not item then
     error({ status = 404, message = "User not found" })
+  end
+  if self:_is_admin(item) and not self:_other_admin_exists(id) then
+    error({ status = 400, message = "Cannot delete the last administrator" })
   end
   return item:delete()
 end

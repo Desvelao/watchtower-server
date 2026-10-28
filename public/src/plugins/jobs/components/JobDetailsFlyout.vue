@@ -31,6 +31,13 @@ async function resolveRef(currentJob) {
   refProperties.value = null;
   if (!currentJob.ref_id) return;
 
+  // observer_test ref_ids are observer_config_test_requests ids, not
+  // observables ids - never resolve them as one.
+  if (currentJob.type === 'observer_test') {
+    refLabel.value = `test request #${currentJob.ref_id}`;
+    return;
+  }
+
   try {
     if (currentJob.from_scheduler) {
       const { item: task } = await getTask(currentJob.ref_id);

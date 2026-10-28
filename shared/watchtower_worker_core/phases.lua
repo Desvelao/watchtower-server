@@ -29,7 +29,7 @@ return {
   DELIVER = 500,
   -- A task that doesn't set its own `phase` (e.g. a third-party plugin
   -- unrelated to the alert pipeline, like
-  -- watchtower_observer_web_scraper's ad-hoc test-poller/site-refresh
+  -- the external plugin's ad-hoc test-poller/target-refresh
   -- tasks) runs after the whole known pipeline by default - nothing stops
   -- such a plugin from setting an earlier phase explicitly if it ever
   -- needs to influence run_once ordering.

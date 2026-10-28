@@ -134,12 +134,26 @@ function M:_derive(source)
   return row, nil
 end
 
+-- Maps a unique-name violation from a model write to a 400 (same idiom as
+-- plugins/security/services/users.lua); rethrows anything else.
+function M:_rethrow_write_error(err, name)
+  if tostring(err):find("duplicate key", 1, true) then
+    error({ status = 400, message = "A " .. self._spec.label .. " named '" .. name .. "' already exists" })
+  end
+  error(err)
+end
+
 function M:create(params)
   local row, err = self:_derive(params.source)
   if not row then
     return nil, err
   end
-  local item = self._model:create(row)
+  local ok, item = pcall(function()
+    return self._model:create(row)
+  end)
+  if not ok then
+    self:_rethrow_write_error(item, row.name)
+  end
   self:_notify_change()
   return item, nil
 end
@@ -157,7 +171,12 @@ function M:update(item_id, params)
 
   row.updated_at = db.format_date()
 
-  local ok = item:update(row)
+  local ok_call, ok = pcall(function()
+    return item:update(row)
+  end)
+  if not ok_call then
+    self:_rethrow_write_error(ok, row.name)
+  end
   if not ok then
     return nil, "Update failed"
   end
@@ -303,7 +322,8 @@ function M:commit_import(items)
     elseif ok then
       table.insert(results, { ok = false, error = err })
     else
-      table.insert(results, { ok = false, error = tostring(row) })
+      local error_message = type(row) == "table" and row.message or tostring(row)
+      table.insert(results, { ok = false, error = error_message })
     end
   end
   return results

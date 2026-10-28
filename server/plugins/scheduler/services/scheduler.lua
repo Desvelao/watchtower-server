@@ -14,7 +14,7 @@
 -- notification_policy_matcher.lua - in-process for the embedded worker, over
 -- narrow non-evaluating endpoints for the standalone one), which enqueues its
 -- result onto alert_deliveries (a durable queue - see that table's own header
--- comment in config/dataset/init.sql) rather than sending anything. deliver
+-- comment in server/dataset/schema.sql) rather than sending anything. deliver
 -- has no target of its own at all - claiming a 'deliver' job just calls
 -- delivery_queue_service's own claim_batch (the same claim PUT
 -- /api/alert_deliveries/claim uses) and hands its result to the caller, an
@@ -30,6 +30,7 @@
 local db = require("lapis.db")
 local route_helpers = require("lib.routes")
 local cron = require("watchtower_worker_core.cron")
+local wake_events = require("lib.wake_events")
 
 local M = {}
 
@@ -207,6 +208,9 @@ function M:_derive(params, existing)
   end
 
   if params.run_now then
+    if params.enabled == false then
+      return nil, "run_now cannot be combined with enabled=false"
+    end
     next_run_at = db.format_date()
   end
 
@@ -214,9 +218,13 @@ function M:_derive(params, existing)
   -- (enabled=false) task back to true on any update that omits `enabled` -
   -- Lua's `or` can't distinguish "false" from "absent". A one-shot task
   -- that fire_due already disabled after firing must stay disabled across
-  -- an unrelated update (e.g. a bare run_now, or a name change).
+  -- an unrelated update (e.g. a name change).
   local enabled = params.enabled
-  if enabled == nil then
+  if params.run_now then
+    -- fire_due only picks up enabled tasks, so run_now must re-enable a
+    -- disabled / already-fired one-shot task or it would never fire.
+    enabled = true
+  elseif enabled == nil then
     if existing then
       enabled = existing.enabled
     else
@@ -313,7 +321,7 @@ end
 -- RETURNING always yields the row's id either way) instead of stacking a
 -- duplicate. worker_id stays NULL - unclaimed until :claim_next_batch picks
 -- it up. from_scheduler=true marks this row as scheduler-fired (ref_id is a
--- scheduler_tasks.id, not an observables.id) - see config/dataset/init.sql's
+-- scheduler_tasks.id, not an observables.id) - see server/dataset/schema.sql's
 -- comment on jobs.from_scheduler. Used for exactly one row per task firing.
 local function queue_pending_job(type_, ref_id)
   local rows = db.query([[
@@ -322,6 +330,12 @@ local function queue_pending_job(type_, ref_id)
     ON CONFLICT (type, ref_id) WHERE status = 'pending' DO UPDATE SET updated_at = NOW()
     RETURNING id
   ]], type_, ref_id)
+  -- type_ ("observe"/"analyze"/"notify"/"deliver") is exactly one of
+  -- lib/wake_events.lua's fixed wake keys - no mapping table needed. Bumped
+  -- unconditionally (a re-fire that reused an already-pending row via the
+  -- ON CONFLICT above still means "there's a pending row a worker hasn't
+  -- claimed yet", so it's still worth waking one).
+  wake_events.bump(type_)
   return rows[1].id
 end
 
@@ -401,50 +415,84 @@ end
 -- shared/watchtower_worker_core/notification_senders.lua exactly as it would
 -- for a direct alert_deliveries claim, then reports both the deliveries
 -- outcome (via delivery_queue_service:report, unchanged) and this wrapping
--- job's own ack/error (skip_rollup=true, same as analyze/notify). Returns nil
+-- job's own ack/error (skip_rollup=true, same as analyze/notify). A job whose
+-- task was deleted is errored out (message "scheduler task <id> no longer
+-- exists") and skipped. Returns nil
 -- when nothing is pending for `type_`.
 function M:claim_next_batch(worker_id, type_)
   if not TASK_TYPES[type_] then
     error({ status = 400, message = "type must be one of observe, analyze, notify, deliver" })
   end
 
-  local rows = db.query([[
-    UPDATE jobs
-       SET worker_id = ?, status = 'triggering', taken_at = NOW(), updated_at = NOW()
-     WHERE id = (
-       SELECT id FROM jobs
-        WHERE status = 'pending' AND type = ?
-        ORDER BY created_at ASC
-        LIMIT 1
-        FOR UPDATE SKIP LOCKED
-     )
-    RETURNING id, ref_id
-  ]], worker_id, type_)
+  -- A claimed job whose scheduler_tasks row has since been deleted (nothing
+  -- at the DB level stops that - jobs.ref_id has no FK) is resolved to a
+  -- terminal 'error' in the same transaction as its claim and the loop moves
+  -- on to the next pending job, so such rows are consumed rather than
+  -- clogging the queue, and a missing task never falls through to the
+  -- "every enabled policy"/"no observables" defaults. deliver has no
+  -- scheduler_tasks-owned target (see above), so it is never checked.
+  while true do
+    local claimed = route_helpers.with_transaction(function()
+      local rows = db.query([[
+        UPDATE jobs
+           SET worker_id = ?, status = 'triggering', taken_at = NOW(), updated_at = NOW()
+         WHERE id = (
+           SELECT id FROM jobs
+            WHERE status = 'pending' AND type = ?
+            ORDER BY created_at ASC
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+         )
+        RETURNING id, ref_id
+      ]], worker_id, type_)
 
-  local row = rows[1]
-  if not row then
-    return nil
+      local row = rows[1]
+      if not row then
+        return { empty = true }
+      end
+
+      if type_ == "deliver" then
+        return { row = row }
+      end
+
+      local task = self._model:find({ id = row.ref_id })
+      if not task then
+        db.query(
+          "UPDATE jobs SET status = 'error', error_at = NOW(), updated_at = NOW(), message = ? WHERE id = ?",
+          "scheduler task " .. tostring(row.ref_id) .. " no longer exists",
+          row.id
+        )
+        return { orphaned = true }
+      end
+
+      return { row = row, task = task }
+    end)
+
+    if claimed.empty then
+      return nil
+    end
+
+    if not claimed.orphaned then
+      local row, task = claimed.row, claimed.task
+
+      if type_ == "deliver" then
+        local batch = self._delivery_queue:claim_batch(worker_id)
+        return { job_id = row.id, task_id = row.ref_id, type = type_, groups = batch and batch.groups or {} }
+      end
+
+      if type_ == "notify" then
+        local policy_ids = task.notify_policy_ids
+        return {
+          job_id = row.id,
+          task_id = row.ref_id,
+          type = type_,
+          notify_policy_ids = policy_ids and #policy_ids > 0 and policy_ids or nil,
+        }
+      end
+
+      return { job_id = row.id, task_id = row.ref_id, type = type_, observables = self:_resolve_observables(task) }
+    end
   end
-
-  if type_ == "deliver" then
-    local claimed = self._delivery_queue:claim_batch(worker_id)
-    return { job_id = row.id, task_id = row.ref_id, type = type_, groups = claimed and claimed.groups or {} }
-  end
-
-  local task = self._model:find({ id = row.ref_id })
-
-  if type_ == "notify" then
-    local policy_ids = task and task.notify_policy_ids
-    return {
-      job_id = row.id,
-      task_id = row.ref_id,
-      type = type_,
-      notify_policy_ids = policy_ids and #policy_ids > 0 and policy_ids or nil,
-    }
-  end
-
-  local observables = task and self:_resolve_observables(task) or {}
-  return { job_id = row.id, task_id = row.ref_id, type = type_, observables = observables }
 end
 
 return M

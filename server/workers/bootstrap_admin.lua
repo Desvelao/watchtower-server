@@ -32,6 +32,17 @@ local function run()
   end
 
   local ok, err = pcall(function()
+    -- server/dataset/schema.sql must exist before the roles/users lookup
+    -- below - ensure() is idempotent (no-ops once already applied) and
+    -- self-contained (its own pcall, never raises), so it's safe to call
+    -- defensively here rather than relying on any ordering between this
+    -- module's own ngx.timer.at(0, ...) callback and any other boot-time
+    -- DB consumer's (see bootstrap_schema.lua's header comment - two
+    -- independently-scheduled zero-delay timers have no guaranteed
+    -- relative order, and cosockets aren't available directly in
+    -- init_worker_by_lua_block to sequence this any other way).
+    require("workers.bootstrap_schema").ensure()
+
     local db = require("lapis.db")
     local admin_role = require("models.roles"):find({ name = "admin" })
     if not admin_role then

@@ -85,14 +85,21 @@ end
 
 function M:get_context_from_request(request, config)
   local data, err
+  local first_err
   for k, v in pairs(self.providers) do
     if not data and (not config.providers or config.providers and includes(config.providers, k)) then
       data, err = self.providers[k]:get_context_from_request(request)
+      -- A provider that found credentials but rejected them (revoked, expired,
+      -- tampered...) outranks other providers' "Missing ..." (no credentials
+      -- sent to them), and pairs() order is unspecified.
+      if not data and err and not first_err and err:sub(1, 8) ~= "Missing " then
+        first_err = err
+      end
     end
   end
 
   if not data then
-    return nil, "Missing Authorization"
+    return nil, first_err or "Missing Authorization"
   end
 
   return data, nil

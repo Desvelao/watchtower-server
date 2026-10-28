@@ -10,7 +10,10 @@
 --                                 for a multiple=true property)
 --   properties.price.gt/.gte/
 --   properties.price.lt/.lte  -> cast-compare, only for number/date typed
---                                 properties (see RANGE_CAST_BY_TYPE)
+--                                 properties (see RANGE_CAST_BY_TYPE); NOT
+--                                 registered for a multiple=true property,
+--                                 since `->>` on its stored array can't be
+--                                 cast safely
 local db = require("lapis.db")
 local cjson = require("cjson")
 local cjson_safe = require("cjson.safe")
@@ -19,7 +22,8 @@ local M = {}
 
 -- SQL cast used for `(column->>name)::<cast>` range comparisons, keyed by
 -- property `type`. A type with no entry here (string/url/enum/boolean) only
--- gets exact/contains (`@>`) query params, never a range one.
+-- gets exact/contains (`@>`) query params, never a range one. Range params
+-- also apply to single-valued properties only (never `multiple=true`).
 M.RANGE_CAST_BY_TYPE = { number = "numeric", date = "timestamp" }
 
 local RANGE_OPERATORS = { gt = ">", gte = ">=", lt = "<", lte = "<=" }
@@ -75,7 +79,7 @@ function M.where_params_for_schema(column, schema)
     })
 
     local cast = M.RANGE_CAST_BY_TYPE[prop.type]
-    if cast then
+    if cast and not prop.multiple then
       for suffix, operator in pairs(RANGE_OPERATORS) do
         table.insert(params, {
           key = key .. "." .. suffix,
@@ -99,19 +103,36 @@ end
 
 -- Returns column specs (for lib.routes.create_search_map_clause) covering
 -- every `searchable` string/url/enum property in `schema`, ILIKE-matching
--- `column->>'<name>'`.
+-- `column->>'<name>'`. A `multiple=true` property (stored as a jsonb array)
+-- instead matches if ANY element ILIKE-matches; the array access is guarded
+-- so a scalar/absent stored value yields no match rather than an error.
 function M.searchable_columns(column, schema)
   local route_helpers = require("lib.routes")
   local columns = {}
 
   for _, prop in ipairs(schema or {}) do
     if prop.searchable and (prop.type == "string" or prop.type == "url" or prop.type == "enum") then
-      table.insert(columns, {
-        key = string.format("%s->>%s", column, db.escape_literal(prop.name)),
-        map_clause = function(p)
-          return route_helpers.escaped_like_clause(p.key, p.value, "ILIKE")
-        end,
-      })
+      if prop.multiple then
+        local access = string.format("%s->%s", column, db.escape_literal(prop.name))
+        table.insert(columns, {
+          key = access,
+          map_clause = function(p)
+            return string.format(
+              "EXISTS (SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(%s) = 'array' THEN %s ELSE '[]'::jsonb END) AS e(v) WHERE %s)",
+              p.key,
+              p.key,
+              route_helpers.escaped_like_clause("e.v", p.value, "ILIKE")
+            )
+          end,
+        })
+      else
+        table.insert(columns, {
+          key = string.format("%s->>%s", column, db.escape_literal(prop.name)),
+          map_clause = function(p)
+            return route_helpers.escaped_like_clause(p.key, p.value, "ILIKE")
+          end,
+        })
+      end
     end
   end
 

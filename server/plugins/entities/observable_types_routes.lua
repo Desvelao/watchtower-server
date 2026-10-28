@@ -287,19 +287,36 @@ return function(app, deps)
       end
 
       local created, failed = {}, 0
-      for _, row in ipairs(decoded.items or {}) do
-        local derived, err = derive_row(row)
-        if not derived then
-          failed = failed + 1
-        else
+      local errors = setmetatable({}, cjson.empty_array_mt)
+      local function record_error(index, row, message)
+        failed = failed + 1
+        local entry = { index = index, message = message }
+        if type(row) == "table" and type(row.name) == "string" then
+          entry.name = row.name
+        end
+        table.insert(errors, entry)
+      end
+
+      for i, row in ipairs(decoded.items or {}) do
+        local ok_row, err_row = pcall(function()
+          local derived, err = derive_row(row)
+          if not derived then
+            record_error(i, row, tostring(err))
+            return
+          end
           local ok_create, new_item = pcall(function()
             return models.ObservableTypes:create(derived)
           end)
           if ok_create then
             table.insert(created, decode_row(new_item))
+          elseif tostring(new_item):find("duplicate key", 1, true) then
+            record_error(i, row, "An observable type with this name already exists")
           else
-            failed = failed + 1
+            record_error(i, row, "Could not be created")
           end
+        end)
+        if not ok_row then
+          record_error(i, row, "Invalid row")
         end
       end
 
@@ -307,7 +324,7 @@ return function(app, deps)
         observable_type_manager:invalidate()
       end
 
-      return { json = { ok = true, content = { items = created, failed = failed } } }
+      return { json = { ok = true, content = { items = created, failed = failed, errors = errors } } }
     end)
   )
 

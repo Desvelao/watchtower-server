@@ -3,6 +3,7 @@ import { ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '../../../stores/auth';
 import { HTTPError } from '../../../services/api/http';
+import PasswordInput from '../../../components/common/PasswordInput.vue';
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -50,13 +51,13 @@ async function onSubmit() {
       </div>
       <div>
         <label class="block text-sm font-medium text-slate-700 dark:text-slate-300" for="password">Password</label>
-        <input
+        <PasswordInput
           id="password"
           v-model="password"
-          type="password"
           autocomplete="current-password"
           required
-          class="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100 dark:focus:border-slate-400"
+          wrapper-class="mt-1"
+          class="w-full rounded border border-slate-300 py-2 pl-3 text-sm focus:border-slate-500 focus:outline-none dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100 dark:focus:border-slate-400"
         />
       </div>
       <p v-if="error" class="text-sm text-red-600 dark:text-red-400">{{ error }}</p>

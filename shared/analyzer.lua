@@ -105,7 +105,7 @@ function M.new(rule_engine, alert_manager, log_error)
     has_alert_for_observation = already_alerted,
     has_recent_alert = is_in_cooldown,
     -- A unique-constraint violation from alerts_rule_id_observation_id_idx
-    -- (config/dataset/init.sql) - the DB-level backstop for the same
+    -- (server/dataset/schema.sql) - the DB-level backstop for the same
     -- invariant already_alerted checks, in case of a race between two
     -- concurrent analyzer passes - is a silent suppression, not a failure.
     create_alert = function(fields)

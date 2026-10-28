@@ -4,7 +4,7 @@
 -- `{id, type, ...type-specific fields}`.
 --
 -- An observer TYPE (the builder_fn behind one `type` string, e.g.
--- "web_scraper") is registered via M.register_type(name, builder_fn),
+-- e.g. a plugin-provided observer type) is registered via M.register_type(name, builder_fn),
 -- called by that type's own module at require time - see M.register_type
 -- below. This is the extension seam an external consumer uses to plug in
 -- an entirely new kind of observer (an RSS poller, an API poller, ...)
@@ -42,10 +42,10 @@ local function pick(tbl, keys)
   return result
 end
 
--- Self-registration: an observer-type module (e.g. watchtower_observer_web_scraper.observers.web_scraper)
+-- Self-registration: an observer-type module (e.g. the external plugin's observer module)
 -- calls M.register_type(name, builder_fn) once, at its own require time,
 -- instead of every worker entry point hand-building a {type_name -> builder_fn}
--- table. Mirrors watchtower_observer_web_scraper.scraper_creator's own webscraper.sites:register(name, fn)
+-- table. Mirrors the external plugin's own targets:register(name, fn)
 -- pattern already used elsewhere in this codebase. Re-registering the same
 -- name silently overwrites (last-wins) - same precedent, no duplicate error.
 M._registered_types = {}
@@ -93,9 +93,9 @@ end
 --   a globally-registered type for one particular registry instance (e.g. tests).
 --   Pass nil to rely entirely on self-registered types.
 -- deps: passed through to every builder as builder(observer_config, deps) -
---   e.g. `fetch_remote_sites` (a sites_source = "remote" observer's site-list
---   loader) and `scraper_transport` (the embedded worker's non-blocking
---   fetch); see watchtower_observer_web_scraper.observers.web_scraper for what it reads.
+--   e.g. `fetch_remote_targets` (a targets_source = "remote" observer's target-list
+--   loader) and `fetch_transport` (the embedded worker's non-blocking
+--   fetch); see the external plugin's observer module for what it reads.
 --
 -- An unknown `type` or a duplicate `observable_type` mapping is a construction-
 -- time config mistake and raises immediately (fail fast on bad config, not
@@ -169,7 +169,7 @@ end
 -- heartbeat self-reporting (see watchtower_worker_core.config_report's
 -- apply_registry/build_reportable_config). An observer type opts in by
 -- implementing :reportable_config(observer_config) (see e.g.
--- watchtower_observer_web_scraper's "web_scraper" type); one that doesn't
+-- the external plugin's plugin-provided observer type); one that doesn't
 -- falls back to a generic, minimal allow-list (BASE_OBSERVER_FIELDS)
 -- rather than reporting nothing for it.
 function M:reportable_observers()
@@ -188,9 +188,9 @@ end
 -- :maintenance_tasks() - the per-INSTANCE counterpart to a
 -- watchtower_worker_core.lifecycle plugin's own per-TYPE `tasks`: an
 -- observer instance's own periodic upkeep, scoped to exactly the
--- instance(s) actually configured (e.g. watchtower_observer_web_scraper's
--- sites_source="remote" site-list refresh, one task per "remote" instance,
--- each on that instance's own remote_sites_refresh_interval). An observer
+-- instance(s) actually configured (e.g. the external plugin's
+-- targets_source="remote" target-list refresh, one task per "remote" instance,
+-- each on that instance's own remote_targets_refresh_interval). An observer
 -- type that doesn't implement it contributes nothing - not every type has
 -- per-instance upkeep to do. Same optional-instance-method,
 -- no-self-registration-table pattern as :capabilities()/:reportable_config()

@@ -1,11 +1,12 @@
 -- Sender-side claim/report cycle for the durable alert_deliveries queue
--- (see that table's own header comment in config/dataset/init.sql) - the
+-- (see that table's own header comment in server/dataset/schema.sql) - the
 -- "deliver" worker role's entire job. Fully independent of
 -- scheduler_tasks/jobs: enqueuing (the "evaluator"
 -- role's worker-side matching, shared/watchtower_worker_core/
 -- notification_policy_matcher.lua) and sending (this file) share no state
 -- beyond the alert_deliveries rows themselves.
 local db = require("lapis.db")
+local wake_events = require("lib.wake_events")
 
 local M = {}
 
@@ -143,7 +144,15 @@ function M:enqueue(alert_id, channel_id)
       WHERE alert_deliveries.status = 'error'
     RETURNING alert_id
   ]], alert_id, channel_id)
-  return rows[1] ~= nil
+  local inserted = rows[1] ~= nil
+  if inserted then
+    -- Only when a row was genuinely inserted/reset for retry, not when an
+    -- already-pending/triggering/sent row was left untouched - see
+    -- lib/wake_events.lua's own header comment for why this is a bare
+    -- counter bump, never the delivery itself.
+    wake_events.bump("deliver")
+  end
+  return inserted
 end
 
 -- Applies a batch's reported channel_results (see

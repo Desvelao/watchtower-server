@@ -24,7 +24,7 @@ end
 -- elements, so a zero-element array has nothing to infer from and fails
 -- with "cannot determine type of empty array" - this can legitimately
 -- happen when a worker's capabilities are computed from its configured
--- sites (see the shared worker code in Phase 5) rather than a hardcoded
+-- targets (see the shared worker code in Phase 5) rather than a hardcoded
 -- non-empty constant.
 --
 -- The two inserts are not wrapped in an explicit transaction - matches
